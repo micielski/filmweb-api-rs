@@ -1,42 +1,230 @@
 pub mod error;
+pub mod imdb;
+
 pub use error::FwErrors;
+use imdb::*;
 use priority_queue::PriorityQueue;
-use reqwest::{header, Client};
+use reqwest::blocking::Client;
+use reqwest::header;
+use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 
 const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/106.0";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/108.0";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FwPage {
-    pub page: FwPageNumbered,
-    pub rated_titles: Vec<FwTitle>,
-}
+pub trait Title {
+    fn url(&self) -> &String;
 
-trait Title {
-    fn fw_url(&self) -> &String;
+    fn id(&self) -> u32;
 
-    fn fw_id(&self) -> u32;
-
-    fn fw_title_pl(&self) -> &String;
+    fn title_pl(&self) -> &String;
 
     fn title_type(&self) -> &FwTitleType;
 
-    fn fw_duration(&self) -> Option<u16>;
+    fn duration(&self) -> Option<u16>;
 
     fn year(&self) -> &Year;
+
+    fn alter_titles(&mut self) -> Option<&mut PriorityQueue<AlternateTitle, u8>>;
+
+    fn set_imdb_data_with_lookup(&mut self, client: &Client) -> Result<(), FwErrors>;
+
+    fn imdb_data(&self) -> Option<&ImdbTitle>;
+
+    fn imdb_lookup(&mut self, client: &Client) -> Result<ImdbTitle, FwErrors> {
+        let year = match &mut self.year() {
+            Year::OneYear(year) | Year::Range(year, _) => year.clone(),
+        };
+
+        while let Some((ref alternate_title, score)) = self.alter_titles().as_mut().unwrap().pop() {
+            if score == 0 {
+                break;
+            }
+
+            match advanced_imdb_search(&alternate_title.title, year, year, &client) {
+                Ok(imdb_title) => return Ok(imdb_title),
+                Err(_) => (),
+            }
+
+            match imdb_search(&alternate_title.title, year, client) {
+                Ok(imdb_title) => return Ok(imdb_title),
+                Err(_) => (),
+            }
+        }
+        return Err(FwErrors::ZeroResults);
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FwTitle {
-    fw_url: String,
-    fw_id: u32,
-    fw_title_pl: String,
-    fw_alter_titles: Option<PriorityQueue<AlternateTitle, u8>>,
-    title_type: FwTitleType,
-    fw_duration: Option<u16>, // time in minutes
+pub struct FwGuest(Client);
+
+impl Deref for FwGuest {
+    type Target = Client;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+struct ScrapedFwTitleData {
+    id: u32,
     year: Year,
-    imdb_data: Option<IMDbApiDetails>,
+    name: String,
+    url: String,
+    alter_titles: PriorityQueue<AlternateTitle, u8>,
+    duration: u16, // in minutes
+}
+
+fn scrape_from_document(
+    votebox: ElementRef,
+    client: &Client,
+) -> Result<ScrapedFwTitleData, FwErrors> {
+    let id = votebox
+        .select(&Selector::parse(".previewFilm").unwrap())
+        .next()
+        .unwrap()
+        .value()
+        .attr("data-film-id")
+        .unwrap()
+        .trim()
+        .parse::<u32>()?;
+    let year = {
+        let year = votebox
+            .select(&Selector::parse(".preview__year").unwrap())
+            .next()
+            .unwrap()
+            .inner_html();
+        if year.contains('-') {
+            let years = year.trim().split('-').collect::<Vec<&str>>();
+            let year_start = years[0]
+                .trim()
+                .parse::<u16>()
+                .expect("Failed to parse a year from a serial votebox");
+            let year_end = years[1]
+                .trim()
+                .parse::<u16>()
+                .map_or(year_start, |year| year);
+            Year::Range(year_start, year_end)
+        } else {
+            match year.trim().parse::<u16>() {
+                Ok(year) => Year::OneYear(year),
+                Err(_) => {
+                    return Err(FwErrors::InvalidYear {
+                        title_id: id,
+                        failed_year: year,
+                    })
+                }
+            }
+        }
+    };
+
+    let name = votebox
+        .select(&Selector::parse(".preview__link").unwrap())
+        .next()
+        .unwrap()
+        .inner_html();
+
+    let url: String = format!(
+        "https://filmweb.pl{}",
+        votebox
+            .select(&Selector::parse(".preview__link").unwrap())
+            .next()
+            .unwrap()
+            .value()
+            .attr("href")
+            .unwrap()
+    );
+
+    let alter_titles_url = format!("{}/titles", url);
+    let alter_titles = AlternateTitle::fw_get_titles(&alter_titles_url, client)?;
+
+    let duration = {
+        let document = {
+            let res = client.get(&url).send()?.text()?;
+            Html::parse_document(&res)
+        };
+        document
+            .select(&Selector::parse(".filmCoverSection__duration").unwrap())
+            .next()
+            .unwrap()
+            .value()
+            .attr("data-duration")
+            .unwrap()
+            .parse::<u16>()
+            .ok()
+            .unwrap()
+    };
+    Ok(ScrapedFwTitleData {
+        id,
+        year,
+        name,
+        url,
+        alter_titles,
+        duration,
+    })
+}
+
+impl FwGuest {
+    pub fn scrape(&self, url: &str) -> Result<Vec<FwTitle>, FwErrors> {
+        let res = self.get(url).send()?.text()?;
+        debug_assert!(res.contains("preview__year"));
+        debug_assert!(res.contains("preview__link"));
+        let document = Html::parse_document(&res);
+        let mut scraped_titles = Vec::new();
+        for votebox in document.select(&Selector::parse("div.myVoteBox").unwrap()) {
+            let ScrapedFwTitleData {
+                id,
+                year,
+                name,
+                url,
+                alter_titles,
+                duration: fw_duration,
+            } = scrape_from_document(votebox, &self.0)?;
+            let title = FwTitle {
+                id,
+                year,
+                name,
+                url,
+                alter_titles: Some(alter_titles),
+                duration: Some(fw_duration),
+                imdb_data: None,
+                title_type: FwTitleType::Film,
+            };
+            scraped_titles.push(title);
+        }
+        Ok(scraped_titles)
+    }
+}
+
+pub fn create_imdb_client() -> Result<Client, reqwest::Error> {
+    log::debug!("Creating IMDb Client");
+    let mut headers = header::HeaderMap::new();
+    headers.insert(
+        header::CONNECTION,
+        header::HeaderValue::from_static("keep-alive"),
+    );
+    headers.insert(
+        header::ACCEPT_ENCODING,
+        header::HeaderValue::from_static("gzip"),
+    );
+
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .gzip(true)
+        .default_headers(headers)
+        .cookie_store(true)
+        .build()
+}
+
+#[derive(Debug)]
+pub struct FwTitle {
+    url: String,
+    id: u32,
+    name: String,
+    alter_titles: Option<PriorityQueue<AlternateTitle, u8>>,
+    title_type: FwTitleType,
+    duration: Option<u16>, // in minutes
+    year: Year,
+    imdb_data: Option<ImdbTitle>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -45,37 +233,43 @@ pub enum Year {
     Range(u16, u16),
 }
 
-impl FwTitle {
-    pub fn fw_url(&self) -> &String {
-        &self.fw_url
+impl Title for FwTitle {
+    fn url(&self) -> &String {
+        &self.url
     }
 
-    pub fn fw_id(&self) -> u32 {
-        self.fw_id
+    fn id(&self) -> u32 {
+        self.id
     }
 
-    pub fn fw_title_pl(&self) -> &String {
-        &self.fw_title_pl
+    fn title_pl(&self) -> &String {
+        &self.name
     }
 
-    pub fn title_type(&self) -> &FwTitleType {
+    fn title_type(&self) -> &FwTitleType {
         &self.title_type
     }
 
-    pub fn fw_duration(&self) -> Option<u16> {
-        self.fw_duration
+    fn duration(&self) -> Option<u16> {
+        self.duration
     }
 
-    pub fn year(&self) -> &Year {
+    fn year(&self) -> &Year {
         &self.year
     }
-}
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IMDbApiDetails {
-    pub title: String,
-    pub id: String,
-    pub duration: u32,
+    fn alter_titles(&mut self) -> Option<&mut PriorityQueue<AlternateTitle, u8>> {
+        self.alter_titles.as_mut()
+    }
+
+    fn imdb_data(&self) -> Option<&ImdbTitle> {
+        self.imdb_data.as_ref()
+    }
+
+    fn set_imdb_data_with_lookup(&mut self, client: &Client) -> Result<(), FwErrors> {
+        self.imdb_data = Some(self.imdb_lookup(client)?);
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -84,26 +278,82 @@ pub struct AlternateTitle {
     pub title: String,
 }
 
+impl AlternateTitle {
+    #[must_use]
+    pub fn score_title(language: &str) -> u8 {
+        if language.contains("USA") || language.contains("angielski") {
+            10
+        } else if language.contains("oryginalny") {
+            9
+        } else if language.contains("główny") {
+            8
+        } else if language.contains("alternatywna pisownia") {
+            7
+        } else if language.contains("inny tytuł") {
+            6
+        } else if language.contains("Polska") {
+            5
+        } else {
+            0
+        }
+    }
+
+    pub fn fw_get_titles(url: &str, client: &Client) -> Result<PriorityQueue<Self, u8>, FwErrors> {
+        let response = client.get(url).send().unwrap().text()?;
+        let document = Html::parse_document(&response);
+        let select_titles = Selector::parse(".filmTitlesSection__title").unwrap();
+        let select_language = Selector::parse(".filmTitlesSection__desc").unwrap();
+        let mut titles = PriorityQueue::new();
+        document
+            .select(&select_titles)
+            .into_iter()
+            .zip(document.select(&select_language))
+            .for_each(|(title, language)| {
+                let title = title.inner_html();
+                let language = language.inner_html();
+                let score = Self::score_title(&language);
+                titles.push(Self { language, title }, score);
+            });
+        Ok(titles)
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FwTitleType {
     Film,
-    Serial,
-    WantsToSee,
+    Show,
+    Watchlist,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum FwPageNumbered {
+pub enum FwPageType {
     Films(u8),
-    Serials(u8),
-    WantsToSee(u8),
+    Shows(u8),
+    Watchlist(u8),
 }
 
-impl From<FwPageNumbered> for FwTitleType {
-    fn from(fw_page_number: FwPageNumbered) -> Self {
+impl FwPageType {
+    fn to_user_url(&self, username: &str) -> String {
+        match *self {
+            Self::Films(p) => format!("https://www.filmweb.pl/user/{}/films?page={}", username, p),
+            Self::Shows(p) => format!(
+                "https://www.filmweb.pl/user/{}/serials?page={}",
+                username, p
+            ),
+            Self::Watchlist(p) => format!(
+                "https://www.filmweb.pl/user/{}/wantToSee?page={}",
+                username, p
+            ),
+        }
+    }
+}
+
+impl From<FwPageType> for FwTitleType {
+    fn from(fw_page_number: FwPageType) -> Self {
         match fw_page_number {
-            FwPageNumbered::Films(_) => Self::Film,
-            FwPageNumbered::Serials(_) => Self::Serial,
-            FwPageNumbered::WantsToSee(_) => Self::WantsToSee,
+            FwPageType::Films(_) => Self::Film,
+            FwPageType::Shows(_) => Self::Show,
+            FwPageType::Watchlist(_) => Self::Watchlist,
         }
     }
 }
@@ -129,28 +379,104 @@ pub fn new_client() -> Result<Client, reqwest::Error> {
 }
 
 pub mod authenticated {
-    use super::{FwErrors, FwTitle, FwTitleType, Title, Year, USER_AGENT};
-    use priority_queue::PriorityQueue;
+    use super::{
+        imdb::*, scrape_from_document, AlternateTitle, Deref, FwErrors, FwPageType, FwTitle,
+        FwTitleType, ScrapedFwTitleData, Title, Year, USER_AGENT,
+    };
+    use csv::Writer;
     use reqwest::blocking::Client;
     use reqwest::header;
     use scraper::{Html, Selector};
     use serde::{Deserialize, Serialize};
-    use std::ops::Deref;
+    use std::fs::File;
 
-    #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone)]
     pub struct FwUser {
+        fw_client: FwClient,
         pub username: String,
         pub token: String,
         pub session: String,
         pub jwt: String,
-        pub counts: UserCounts,
+        pub counts: FwUserCounts,
+    }
+
+    #[derive(Debug)]
+    pub struct RatedPage {
+        pub rated_titles: Vec<RatedTitle>,
+    }
+
+    #[derive(Debug)]
+    pub struct ExportFiles {
+        pub generic: Writer<File>,
+        pub want2see: Writer<File>,
+        pub favorited: Writer<File>,
+    }
+
+    impl ExportFiles {
+        pub fn new() -> Result<Self, std::io::Error> {
+            let write_header = |wtr| -> Writer<File> {
+                let mut wtr: Writer<File> = csv::Writer::from_writer(wtr);
+                wtr.write_record([
+                    "Const",
+                    "Your Rating",
+                    "Date Rated",
+                    "Title",
+                    "URL",
+                    "Title Type",
+                    "IMDb Rating",
+                    "Runtime (mins)",
+                    "Year",
+                    "Genres",
+                    "Num Votes",
+                    "Release Date",
+                    "Directors",
+                ])
+                .unwrap();
+                wtr
+            };
+            if let Err(e) = std::fs::create_dir("./exports") {
+                match e.kind() {
+                    std::io::ErrorKind::AlreadyExists => (),
+                    _ => panic!("{}", e),
+                }
+            };
+            let generic = File::create("exports/generic.csv")?;
+            let want2see = File::create("exports/want2see.csv")?;
+            let favorited = File::create("exports/favorited.csv")?;
+            let generic = write_header(generic);
+            let want2see = write_header(want2see);
+            let favorited = write_header(favorited);
+            Ok(Self {
+                generic,
+                want2see,
+                favorited,
+            })
+        }
+    }
+
+    impl Default for ExportFiles {
+        fn default() -> Self {
+            Self::new().unwrap()
+        }
     }
 
     #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
-    pub struct UserCounts {
+    pub struct FwUserCounts {
         pub movies: u16,
         pub shows: u16,
-        pub marked_to_see: u16,
+        pub watchlist: u16,
+    }
+
+    impl FwUserCounts {
+        pub fn movies_pages(&self) -> u8 {
+            (self.movies / 25 + 1) as u8
+        }
+        pub fn shows_pages(&self) -> u8 {
+            (self.shows / 25 + 1) as u8
+        }
+        pub fn watchlist_pages(&self) -> u8 {
+            (self.watchlist / 25 + 1) as u8
+        }
     }
 
     #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -162,66 +488,151 @@ pub mod authenticated {
         pub timestamp: u128,
     }
 
-    #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
-    pub struct IMDbApiDetails {
-        pub title: String,
-        pub id: String,
-        pub duration: u32,
+    #[derive(Debug)]
+    enum Rating {
+        Rated(FwApiDetails),
+        InWatchlist,
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct FwRatedTitle {
+    #[derive(Debug)]
+    pub struct RatedTitle {
         title: FwTitle,
-        rating: FwApiDetails,
+        rating: Rating,
     }
 
-    impl FwRatedTitle {
-        pub fn new(title: FwTitle, rating: FwApiDetails) -> Self {
-            FwRatedTitle { title, rating }
+    impl RatedTitle {
+        fn new(title: FwTitle, rating: Rating) -> Self {
+            RatedTitle { title, rating }
         }
 
         pub fn is_favorited(&self) -> bool {
-            self.rating.favorite
+            match &self.rating {
+                Rating::Rated(api) => api.favorite,
+                Rating::InWatchlist => false,
+            }
         }
 
-        pub fn rating(&self) -> u8 {
-            self.rating.rate
+        pub fn rating(&self) -> Option<u8> {
+            match &self.rating {
+                Rating::Rated(api) => Some(api.rate),
+                Rating::InWatchlist => None,
+            }
+        }
+
+        #[must_use]
+        pub fn is_duration_similar(&self, duration: u32) -> bool {
+            let fw_duration = match self.duration() {
+                None => return true,
+                Some(duration) => duration,
+            };
+
+            let other_duration = f64::from(duration);
+
+            // if true, it's probably a tv show, and they seem to be very different on both sites
+            // so let's be less restrictive then
+            let (upper, lower) = if other_duration <= 60_f64 && fw_duration <= 60_u16 {
+                (other_duration * 1.50, other_duration * 0.75)
+            } else {
+                (other_duration * 1.15, other_duration * 0.85)
+            };
+
+            // if imdb duration doesn't fit into fw's then set it to none
+            if upper >= fw_duration.into() && lower >= fw_duration.into() {
+                return false;
+            }
+            true
+        }
+
+        pub fn to_csv_imdbv3_tmdb_files(&self, files: &mut ExportFiles) {
+            let title = &self.title_pl();
+            let rating = self
+                .rating()
+                .map_or_else(|| "WATCHLIST".to_string(), |r| r.to_string());
+
+            let imdb_id = {
+                if self.title.imdb_data.is_some() {
+                    &self.title.imdb_data.as_ref().unwrap().id
+                } else {
+                    "not-found"
+                }
+            };
+
+            // In case of year being a range, set it to the first one
+            let year = match self.title.year {
+                Year::OneYear(year) | Year::Range(year, _) => year.to_string(),
+            };
+
+            log::debug!(
+                "Exporting to CSV title: {}, rating: {}, imdb_id: {}",
+                title,
+                rating,
+                imdb_id
+            );
+            let mut fields = [""; 13];
+            fields[0] = imdb_id;
+            fields[1] = rating.as_ref();
+            fields[3] = title.as_ref();
+            fields[9] = year.as_ref();
+            let write_title = |file: &mut Writer<File>| {
+                file.write_record(fields).unwrap();
+            };
+
+            if self.is_favorited() {
+                write_title(&mut files.favorited);
+            } else {
+                match &self.rating {
+                    Rating::Rated(_) => write_title(&mut files.generic),
+                    Rating::InWatchlist => write_title(&mut files.want2see),
+                }
+            }
         }
     }
 
-    impl Title for FwRatedTitle {
-        fn fw_url(&self) -> &String {
-            &self.title.fw_url
+    impl Title for RatedTitle {
+        fn url(&self) -> &String {
+            &self.title.url
         }
 
-        fn fw_id(&self) -> u32 {
-            self.title.fw_id
+        fn alter_titles(
+            &mut self,
+        ) -> Option<&mut priority_queue::PriorityQueue<AlternateTitle, u8>> {
+            self.title.alter_titles.as_mut()
         }
 
-        fn fw_title_pl(&self) -> &String {
-            &self.title.fw_title_pl
+        fn id(&self) -> u32 {
+            self.title.id
+        }
+
+        fn title_pl(&self) -> &String {
+            &self.title.name
         }
 
         fn title_type(&self) -> &FwTitleType {
             &self.title.title_type
         }
 
-        fn fw_duration(&self) -> Option<u16> {
-            self.title.fw_duration
+        fn duration(&self) -> Option<u16> {
+            self.title.duration
         }
 
         fn year(&self) -> &Year {
             &self.title.year
         }
+        fn set_imdb_data_with_lookup(&mut self, client: &Client) -> Result<(), FwErrors> {
+            if self.title.imdb_data.is_none() {
+                self.title.imdb_data = Some(self.imdb_lookup(client)?);
+            }
+
+            Ok(())
+        }
+
+        fn imdb_data(&self) -> Option<&ImdbTitle> {
+            self.title.imdb_data.as_ref()
+        }
     }
 
-    #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
-    pub struct AlternateTitle {
-        pub language: String,
-        pub title: String,
-    }
-
-    pub struct FwClient(Client);
+    #[derive(Debug, Clone)]
+    struct FwClient(Client);
 
     impl Deref for FwClient {
         type Target = Client;
@@ -233,7 +644,7 @@ pub mod authenticated {
     impl FwClient {
         pub fn new(token: String, session: String, jwt: String) -> Self {
             let cookies = format!(
-                "_fwuser_token={}; _fwuser_sessionId={}; JWT{};",
+                "_fwuser_token={}; _fwuser_sessionId={}; JWT={};",
                 token.trim(),
                 session.trim(),
                 jwt.trim()
@@ -267,35 +678,103 @@ pub mod authenticated {
 
     impl FwUser {
         #[must_use]
-        pub fn new(
-            token: String,
-            session: String,
-            jwt: String,
-        ) -> Result<(Self, FwClient), FwErrors> {
+        pub fn new(token: String, session: String, jwt: String) -> Result<Self, FwErrors> {
             let fw_client = FwClient::new(token.clone(), session.clone(), jwt.clone());
             let username = Self::get_username(&fw_client).unwrap();
-            let counts = Self::get_counts(&username, &fw_client).unwrap();
+            let counts = Self::rated_titles_counts(&username, &fw_client).unwrap();
             let user = Self {
+                fw_client,
                 username,
                 token,
                 session,
                 jwt,
                 counts,
             };
-            Ok((user, fw_client))
+            Ok(user)
         }
 
-        fn get_count(
+        pub fn scrape(&self, page: FwPageType) -> Result<RatedPage, FwErrors> {
+            let mut rated_titles: Vec<_> = Vec::new();
+            let url = page.to_user_url(&self.username);
+            let res = self.fw_client.get(url).send()?.text()?;
+            debug_assert!(res.contains("preview__year"));
+            debug_assert!(res.contains("preview__link"));
+            let document = Html::parse_document(&res);
+            for votebox in document.select(&Selector::parse("div.myVoteBox").unwrap()) {
+                let ScrapedFwTitleData {
+                    id,
+                    year,
+                    name,
+                    url,
+                    alter_titles,
+                    duration,
+                } = scrape_from_document(votebox, &self.fw_client)?;
+
+                let rating: Rating = {
+                    let api_response = match page {
+                        FwPageType::Films(_) => Some(
+                            self.fw_client
+                                .get(format!(
+                                    "https://www.filmweb.pl/api/v1/logged/vote/film/{}/details",
+                                    id
+                                ))
+                                .send(),
+                        ),
+                        FwPageType::Shows(_) => Some(
+                            self.fw_client
+                                .get(format!(
+                                    "https://www.filmweb.pl/api/v1/logged/vote/serial/{}/details",
+                                    id
+                                ))
+                                .send(),
+                        ),
+                        FwPageType::Watchlist(_) => None,
+                    };
+                    match api_response {
+                        Some(response) => match response?.json::<FwApiDetails>() {
+                            Ok(v) => Rating::Rated(v),
+                            Err(e) => {
+                                log::info!("Bad Filmweb's api response: {e}");
+                                return Err(FwErrors::InvalidJwt);
+                            }
+                        },
+                        None => Rating::InWatchlist,
+                    }
+                };
+                let unrated_title = FwTitle {
+                    id,
+                    url: url.clone(),
+                    title_type: page.into(),
+                    name,
+                    year,
+                    alter_titles: Some(alter_titles),
+                    duration: Some(duration),
+                    imdb_data: None,
+                };
+                rated_titles.push(RatedTitle::new(unrated_title, rating));
+            }
+
+            Ok(RatedPage { rated_titles })
+        }
+
+        fn rated_movies_count(
             username: &String,
             title_type: FwTitleType,
-            fw_client: FwClient,
+            fw_client: &FwClient,
         ) -> Result<u16, FwErrors> {
+            dbg!(&username);
             let fetch = |title_type: &'static str, title_type2: &'static str| -> u16 {
+                dbg!(&username);
+                dbg!(title_type);
+                dbg!(title_type2);
+                dbg!(&fw_client);
+                let url = format!(
+                    "https://www.filmweb.pl/api/v1/user/{}/{}/{}/count",
+                    username, title_type, title_type2
+                );
+                dbg!(&url);
                 fw_client
-                    .get(format!(
-                        "https://www.filmweb.pl/api/v1/user/{}/{}/{}/count",
-                        username, title_type2, title_type
-                    ))
+                    .get(url)
                     .send()
                     .unwrap()
                     .text()
@@ -305,66 +784,28 @@ pub mod authenticated {
             };
             let count = match title_type {
                 FwTitleType::Film => fetch("votes", "film"),
-                FwTitleType::Serial => fetch("votes", "serial"),
-                FwTitleType::WantsToSee => fetch("want2see", "film"),
+                FwTitleType::Show => fetch("votes", "serial"),
+                FwTitleType::Watchlist => fetch("want2see", "film") + fetch("want2see", "serial"),
             };
 
             Ok(count)
         }
 
-        fn get_counts(
+        fn rated_titles_counts(
             username: &String,
-            fw_client: &Client,
-        ) -> Result<UserCounts, Box<dyn std::error::Error>> {
-            let movies: u16 = fw_client
-                .get(format!(
-                    "https://www.filmweb.pl/api/v1/user/{}/votes/film/count",
-                    username
-                ))
-                .send()?
-                .text()?
-                .parse()
-                .unwrap();
-
-            let marked_to_see_movies: u16 = fw_client
-                .get(format!(
-                    "https://www.filmweb.pl/api/v1/user/{}/want2see/film/count",
-                    username
-                ))
-                .send()?
-                .text()?
-                .parse()
-                .unwrap();
-
-            let shows: u16 = fw_client
-                .get(format!(
-                    "https://www.filmweb.pl/api/v1/user/{}/votes/serial/count",
-                    username
-                ))
-                .send()?
-                .text()?
-                .parse()
-                .unwrap();
-
-            let marked_to_see_shows: u16 = fw_client
-                .get(format!(
-                    "https://www.filmweb.pl/api/v1/user/{}/want2see/serial/count",
-                    username
-                ))
-                .send()?
-                .text()?
-                .parse()
-                .unwrap();
-            let marked_to_see = marked_to_see_shows + marked_to_see_movies;
-
-            Ok(UserCounts {
+            fw_client: &FwClient,
+        ) -> Result<FwUserCounts, Box<dyn std::error::Error>> {
+            let movies = Self::rated_movies_count(username, FwTitleType::Film, fw_client)?;
+            let shows = Self::rated_movies_count(username, FwTitleType::Show, fw_client)?;
+            let watchlist = Self::rated_movies_count(username, FwTitleType::Watchlist, fw_client)?;
+            Ok(FwUserCounts {
                 movies,
                 shows,
-                marked_to_see,
+                watchlist,
             })
         }
 
-        pub fn get_username(fw_client: &FwClient) -> Result<String, FwErrors> {
+        fn get_username(fw_client: &FwClient) -> Result<String, FwErrors> {
             let res = fw_client
                 .get("https://www.filmweb.pl/settings")
                 .send()
@@ -380,5 +821,42 @@ pub mod authenticated {
                 None => return Err(FwErrors::InvalidCredentials),
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::authenticated::*;
+    use super::*;
+    use std::env;
+    struct Cookies {
+        token: String,
+        session: String,
+        jwt: String,
+        username: String,
+    }
+    fn get_cookies() -> Cookies {
+        let token = env::var("FW_TOKEN").unwrap();
+        let session = env::var("FW_SESSION").unwrap();
+        let jwt = env::var("FW_JWT").unwrap();
+        let username = env::var("FW_USER").unwrap();
+        Cookies {
+            token,
+            session,
+            jwt,
+            username,
+        }
+    }
+
+    #[test]
+    fn creating_fwuser_and_username_cheking_and_counts_querying() {
+        let cookies = get_cookies();
+        let user = FwUser::new(cookies.token, cookies.session, cookies.jwt).unwrap();
+        let rated_films: Vec<RatedTitle> = user.scrape(FwPageType::Films(8)).unwrap().rated_titles;
+        for film in rated_films {
+            println!("{}", film.title_pl());
+        }
+        assert!(user.counts.movies > 0);
+        assert_eq!(cookies.username, user.username);
     }
 }
