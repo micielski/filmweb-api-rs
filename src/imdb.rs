@@ -2,18 +2,18 @@ use super::{Client, Deserialize, FwErrors, Html, Selector, Serialize};
 use regex::Regex;
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ImdbTitle {
+pub struct Title {
     pub title: String,
     pub id: String,
     pub duration: u32,
 }
 
-pub fn advanced_imdb_search(
+pub fn advanced_search(
     title: &str,
     year_start: u16,
     year_end: u16,
     imdb_client: &Client,
-) -> Result<ImdbTitle, Box<dyn std::error::Error>> {
+) -> Result<Title, Box<dyn std::error::Error>> {
     let url = format!(
         "https://www.imdb.com/search/title/?title={}&release_date={},{}&adult=include",
         title, year_start, year_end
@@ -72,7 +72,7 @@ pub fn advanced_imdb_search(
         }
     };
 
-    let imdb_data = ImdbTitle {
+    let imdb_data = Title {
         id: title_id,
         title: imdb_title.to_string(),
         duration,
@@ -81,12 +81,12 @@ pub fn advanced_imdb_search(
     Ok(imdb_data)
 }
 
-pub fn imdb_search(
+pub fn search(
     title: &str,
     year: u16,
     imdb_client: &Client,
-) -> Result<ImdbTitle, Box<dyn std::error::Error>> {
-    let url_query = format!("https://www.imdb.com/find?q={}+{}", title, year);
+) -> Result<Title, Box<dyn std::error::Error>> {
+    let url_query = format!("https://www.imdb.com/find?q={title}+{year}");
     let document = {
         let response = imdb_client.get(&url_query).send()?.text()?;
         Html::parse_document(&response)
@@ -130,7 +130,7 @@ pub fn imdb_search(
             .value()
             .attr("href")
             .unwrap();
-        format!("https://www.imdb.com{}", url_suffix)
+        format!("https://www.imdb.com{url_suffix}")
     };
 
     let document = {
@@ -176,7 +176,7 @@ pub fn imdb_search(
     };
     log::debug!("Found duration {duration}m for {title} {year}");
 
-    let imdb_data = ImdbTitle {
+    let imdb_data = Title {
         id: title_id,
         title: imdb_title,
         duration,

@@ -3,7 +3,6 @@ pub mod imdb;
 mod utils;
 
 pub use error::FwErrors;
-use imdb::*;
 use priority_queue::PriorityQueue;
 use reqwest::blocking::Client;
 use reqwest::header;
@@ -32,11 +31,11 @@ pub trait Title {
 
     fn set_imdb_data_with_lookup(&mut self, client: &Client) -> Result<(), FwErrors>;
 
-    fn imdb_data(&self) -> Option<&ImdbTitle>;
+    fn imdb_data(&self) -> Option<&imdb::Title>;
 
-    fn imdb_lookup(&mut self, client: &Client) -> Result<ImdbTitle, FwErrors> {
+    fn imdb_lookup(&mut self, client: &Client) -> Result<imdb::Title, FwErrors> {
         let year = match &mut self.year() {
-            Year::OneYear(year) | Year::Range(year, _) => year.clone(),
+            Year::OneYear(year) | Year::Range(year, _) => *year,
         };
 
         while let Some((ref alternate_title, score)) = self.alter_titles().as_mut().unwrap().pop() {
@@ -44,17 +43,17 @@ pub trait Title {
                 break;
             }
 
-            match advanced_imdb_search(&alternate_title.title, year, year, &client) {
-                Ok(imdb_title) => return Ok(imdb_title),
-                Err(_) => (),
+            if let Ok(imdb_title) =
+                imdb::advanced_search(&alternate_title.title, year, year, client)
+            {
+                return Ok(imdb_title);
             }
 
-            match imdb_search(&alternate_title.title, year, client) {
-                Ok(imdb_title) => return Ok(imdb_title),
-                Err(_) => (),
+            if let Ok(imdb_title) = imdb::search(&alternate_title.title, year, client) {
+                return Ok(imdb_title);
             }
         }
-        return Err(FwErrors::ZeroResults);
+        Err(FwErrors::ZeroResults)
     }
 }
 
@@ -127,7 +126,7 @@ fn scrape_from_document(
             .unwrap()
     );
 
-    let alter_titles_url = format!("{}/titles", title_url);
+    let alter_titles_url = format!("{title_url}/titles");
     let alter_titles = AlternateTitle::fw_get_titles(&alter_titles_url, client)?;
 
     let duration = {
@@ -135,7 +134,8 @@ fn scrape_from_document(
             let res = client.get(&title_url).send()?.text()?;
             Html::parse_document(&res)
         };
-        match document
+
+        document
             .select(&Selector::parse(".filmCoverSection__duration").unwrap())
             .next()
             .unwrap()
@@ -143,13 +143,13 @@ fn scrape_from_document(
             .attr("data-duration")
             .unwrap()
             .parse::<u16>()
-        {
-            Ok(duration) => Some(duration),
-            Err(_) => {
-                log::info!("Duration not found for {title_url}");
-                None
-            }
-        }
+            .map_or_else(
+                |_| {
+                    log::info!("Duration not found for {title_url}");
+                    None
+                },
+                Some,
+            )
     };
     Ok(ScrapedFwTitleData {
         id,
@@ -222,7 +222,7 @@ pub struct FwTitle {
     title_type: FwTitleType,
     duration: Option<u16>, // in minutes
     year: Year,
-    imdb_data: Option<ImdbTitle>,
+    imdb_data: Option<imdb::Title>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -260,7 +260,7 @@ impl Title for FwTitle {
         self.alter_titles.as_mut()
     }
 
-    fn imdb_data(&self) -> Option<&ImdbTitle> {
+    fn imdb_data(&self) -> Option<&imdb::Title> {
         self.imdb_data.as_ref()
     }
 
@@ -331,9 +331,9 @@ pub enum FwPageType {
 }
 
 impl FwPageType {
-    fn to_user_url(&self, username: &str) -> String {
-        match *self {
-            Self::Films(p) => format!("https://www.filmweb.pl/user/{}/films?page={}", username, p),
+    fn user_url(self, username: &str) -> String {
+        match self {
+            Self::Films(p) => format!("https://www.filmweb.pl/user/{username}/films?page={p}"),
             Self::Shows(p) => format!(
                 "https://www.filmweb.pl/user/{}/serials?page={}",
                 username, p
@@ -380,7 +380,7 @@ pub mod authenticated {
     use crate::utils::ClientPool;
 
     use super::{
-        imdb::*, scrape_from_document, AlternateTitle, Deref, FwErrors, FwPageType, FwTitle,
+        imdb, scrape_from_document, AlternateTitle, Deref, FwErrors, FwPageType, FwTitle,
         FwTitleType, ScrapedFwTitleData, Title, Year, USER_AGENT,
     };
     use csv::Writer;
@@ -468,13 +468,16 @@ pub mod authenticated {
     }
 
     impl FwUserCounts {
-        pub fn movies_pages(&self) -> u8 {
+        #[must_use]
+        pub const fn movies_pages(&self) -> u8 {
             (self.movies / 25 + 1) as u8
         }
-        pub fn shows_pages(&self) -> u8 {
+        #[must_use]
+        pub const fn shows_pages(&self) -> u8 {
             (self.shows / 25 + 1) as u8
         }
-        pub fn watchlist_pages(&self) -> u8 {
+        #[must_use]
+        pub const fn watchlist_pages(&self) -> u8 {
             (self.watchlist / 25 + 1) as u8
         }
     }
@@ -501,18 +504,20 @@ pub mod authenticated {
     }
 
     impl RatedTitle {
-        fn new(title: FwTitle, rating: Rating) -> Self {
-            RatedTitle { title, rating }
+        const fn new(title: FwTitle, rating: Rating) -> Self {
+            Self { title, rating }
         }
 
-        pub fn is_favorited(&self) -> bool {
+        #[must_use]
+        pub const fn is_favorited(&self) -> bool {
             match &self.rating {
                 Rating::Rated(api) => api.favorite,
                 Rating::InWatchlist => false,
             }
         }
 
-        pub fn rating(&self) -> Option<u8> {
+        #[must_use]
+        pub const fn rating(&self) -> Option<u8> {
             match &self.rating {
                 Rating::Rated(api) => Some(api.rate),
                 Rating::InWatchlist => None,
@@ -626,7 +631,7 @@ pub mod authenticated {
             Ok(())
         }
 
-        fn imdb_data(&self) -> Option<&ImdbTitle> {
+        fn imdb_data(&self) -> Option<&imdb::Title> {
             self.title.imdb_data.as_ref()
         }
     }
@@ -642,7 +647,7 @@ pub mod authenticated {
     }
 
     impl FwClient {
-        pub fn new(token: String, session: String, jwt: String) -> Self {
+        pub fn new(token: &str, session: &str, jwt: &str) -> Self {
             let cookies = format!(
                 "_fwuser_token={}; _fwuser_sessionId={}; JWT={};",
                 token.trim(),
@@ -664,7 +669,7 @@ pub mod authenticated {
                 header::HeaderValue::from_static("gzip"),
             );
 
-            FwClient(
+            Self(
                 Client::builder()
                     .user_agent(USER_AGENT)
                     .gzip(true)
@@ -681,9 +686,8 @@ pub mod authenticated {
     }
 
     impl FwUser {
-        #[must_use]
         pub fn new(token: String, session: String, jwt: String) -> Result<Self, FwErrors> {
-            let fw_client = FwClient::new(token.clone(), session.clone(), jwt.clone());
+            let fw_client = FwClient::new(&token, &session, &jwt);
             let username = Self::get_username(&fw_client).unwrap();
             let counts = Self::rated_titles_counts(&username, &fw_client).unwrap();
             let fw_client_pool = ClientPool::new(fw_client.into_client(), 3);
@@ -700,7 +704,7 @@ pub mod authenticated {
 
         pub fn scrape(&self, page: FwPageType) -> Result<RatedPage, FwErrors> {
             let mut rated_titles: Vec<_> = Vec::new();
-            let url = page.to_user_url(&self.username);
+            let url = page.user_url(&self.username);
             let res = self.fw_client_pool.get(url).send()?.text()?;
 
             // Ensure that these elements do exist or else it will be critical
@@ -815,13 +819,13 @@ pub mod authenticated {
                 .text()
                 .unwrap();
             let document = Html::parse_document(&res);
-            match document
+            document
                 .select(&Selector::parse(".mainSettings__groupItemStateContent").unwrap())
                 .nth(2)
-            {
-                Some(username_tag) => return Ok(username_tag.inner_html().trim().to_owned()),
-                None => return Err(FwErrors::InvalidCredentials),
-            };
+                .map_or_else(
+                    || Err(FwErrors::InvalidCredentials),
+                    |username_tag| Ok(username_tag.inner_html().trim().to_owned()),
+                )
         }
     }
 }
