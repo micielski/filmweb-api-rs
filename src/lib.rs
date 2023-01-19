@@ -1,5 +1,6 @@
 pub mod error;
 pub mod imdb;
+mod utils;
 
 pub use error::FwErrors;
 use imdb::*;
@@ -9,6 +10,7 @@ use reqwest::header;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
+use utils::ScrapedFwTitleData;
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/108.0";
@@ -65,15 +67,6 @@ impl Deref for FwGuest {
     }
 }
 
-struct ScrapedFwTitleData {
-    id: u32,
-    year: Year,
-    name: String,
-    url: String,
-    alter_titles: PriorityQueue<AlternateTitle, u8>,
-    duration: u16, // in minutes
-}
-
 fn scrape_from_document(
     votebox: ElementRef,
     client: &Client,
@@ -123,7 +116,7 @@ fn scrape_from_document(
         .unwrap()
         .inner_html();
 
-    let url: String = format!(
+    let title_url: String = format!(
         "https://filmweb.pl{}",
         votebox
             .select(&Selector::parse(".preview__link").unwrap())
@@ -134,15 +127,15 @@ fn scrape_from_document(
             .unwrap()
     );
 
-    let alter_titles_url = format!("{}/titles", url);
+    let alter_titles_url = format!("{}/titles", title_url);
     let alter_titles = AlternateTitle::fw_get_titles(&alter_titles_url, client)?;
 
     let duration = {
         let document = {
-            let res = client.get(&url).send()?.text()?;
+            let res = client.get(&title_url).send()?.text()?;
             Html::parse_document(&res)
         };
-        document
+        match document
             .select(&Selector::parse(".filmCoverSection__duration").unwrap())
             .next()
             .unwrap()
@@ -150,14 +143,19 @@ fn scrape_from_document(
             .attr("data-duration")
             .unwrap()
             .parse::<u16>()
-            .ok()
-            .unwrap()
+        {
+            Ok(duration) => Some(duration),
+            Err(_) => {
+                log::info!("Duration not found for {title_url}");
+                None
+            }
+        }
     };
     Ok(ScrapedFwTitleData {
         id,
         year,
         name,
-        url,
+        url: title_url,
         alter_titles,
         duration,
     })
@@ -185,7 +183,7 @@ impl FwGuest {
                 name,
                 url,
                 alter_titles: Some(alter_titles),
-                duration: Some(fw_duration),
+                duration: fw_duration,
                 imdb_data: None,
                 title_type: FwTitleType::Film,
             };
@@ -379,6 +377,8 @@ pub fn new_client() -> Result<Client, reqwest::Error> {
 }
 
 pub mod authenticated {
+    use crate::utils::ClientPool;
+
     use super::{
         imdb::*, scrape_from_document, AlternateTitle, Deref, FwErrors, FwPageType, FwTitle,
         FwTitleType, ScrapedFwTitleData, Title, Year, USER_AGENT,
@@ -390,9 +390,9 @@ pub mod authenticated {
     use serde::{Deserialize, Serialize};
     use std::fs::File;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     pub struct FwUser {
-        fw_client: FwClient,
+        fw_client_pool: ClientPool,
         pub username: String,
         pub token: String,
         pub session: String,
@@ -674,6 +674,10 @@ pub mod authenticated {
                     .unwrap(),
             )
         }
+
+        pub fn into_client(self) -> Client {
+            self.0
+        }
     }
 
     impl FwUser {
@@ -682,8 +686,9 @@ pub mod authenticated {
             let fw_client = FwClient::new(token.clone(), session.clone(), jwt.clone());
             let username = Self::get_username(&fw_client).unwrap();
             let counts = Self::rated_titles_counts(&username, &fw_client).unwrap();
+            let fw_client_pool = ClientPool::new(fw_client.into_client(), 3);
             let user = Self {
-                fw_client,
+                fw_client_pool,
                 username,
                 token,
                 session,
@@ -696,9 +701,12 @@ pub mod authenticated {
         pub fn scrape(&self, page: FwPageType) -> Result<RatedPage, FwErrors> {
             let mut rated_titles: Vec<_> = Vec::new();
             let url = page.to_user_url(&self.username);
-            let res = self.fw_client.get(url).send()?.text()?;
+            let res = self.fw_client_pool.get(url).send()?.text()?;
+
+            // Ensure that these elements do exist or else it will be critical
             debug_assert!(res.contains("preview__year"));
             debug_assert!(res.contains("preview__link"));
+
             let document = Html::parse_document(&res);
             for votebox in document.select(&Selector::parse("div.myVoteBox").unwrap()) {
                 let ScrapedFwTitleData {
@@ -708,12 +716,12 @@ pub mod authenticated {
                     url,
                     alter_titles,
                     duration,
-                } = scrape_from_document(votebox, &self.fw_client)?;
+                } = scrape_from_document(votebox, &self.fw_client_pool)?;
 
                 let rating: Rating = {
                     let api_response = match page {
                         FwPageType::Films(_) => Some(
-                            self.fw_client
+                            self.fw_client_pool
                                 .get(format!(
                                     "https://www.filmweb.pl/api/v1/logged/vote/film/{}/details",
                                     id
@@ -721,7 +729,7 @@ pub mod authenticated {
                                 .send(),
                         ),
                         FwPageType::Shows(_) => Some(
-                            self.fw_client
+                            self.fw_client_pool
                                 .get(format!(
                                     "https://www.filmweb.pl/api/v1/logged/vote/serial/{}/details",
                                     id
@@ -748,7 +756,7 @@ pub mod authenticated {
                     name,
                     year,
                     alter_titles: Some(alter_titles),
-                    duration: Some(duration),
+                    duration,
                     imdb_data: None,
                 };
                 rated_titles.push(RatedTitle::new(unrated_title, rating));
@@ -762,17 +770,11 @@ pub mod authenticated {
             title_type: FwTitleType,
             fw_client: &FwClient,
         ) -> Result<u16, FwErrors> {
-            dbg!(&username);
             let fetch = |title_type: &'static str, title_type2: &'static str| -> u16 {
-                dbg!(&username);
-                dbg!(title_type);
-                dbg!(title_type2);
-                dbg!(&fw_client);
                 let url = format!(
                     "https://www.filmweb.pl/api/v1/user/{}/{}/{}/count",
                     username, title_type, title_type2
                 );
-                dbg!(&url);
                 fw_client
                     .get(url)
                     .send()
@@ -836,7 +838,7 @@ mod tests {
         username: String,
     }
     fn get_cookies() -> Cookies {
-        let token = env::var("FW_TOKEN").unwrap();
+        let token = env::var("FW_TOKEN").expect("Set cookies first");
         let session = env::var("FW_SESSION").unwrap();
         let jwt = env::var("FW_JWT").unwrap();
         let username = env::var("FW_USER").unwrap();
@@ -849,7 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn creating_fwuser_and_username_cheking_and_counts_querying() {
+    fn creating_fwuser_and_username_checking_and_counts_querying() {
         let cookies = get_cookies();
         let user = FwUser::new(cookies.token, cookies.session, cookies.jwt).unwrap();
         let rated_films: Vec<RatedTitle> = user.scrape(FwPageType::Films(8)).unwrap().rated_titles;
