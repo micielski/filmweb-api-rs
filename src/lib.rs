@@ -33,6 +33,8 @@ pub trait Title {
 
     fn imdb_data(&self) -> Option<&imdb::Title>;
 
+    fn imdb_data_owned(&mut self) -> Option<imdb::Title>;
+
     fn imdb_lookup(&mut self, client: &Client) -> Result<imdb::Title, FwErrors> {
         let year = match &mut self.year() {
             Year::OneYear(year) | Year::Range(year, _) => *year,
@@ -267,6 +269,10 @@ impl Title for FwTitle {
     fn set_imdb_data_with_lookup(&mut self, client: &Client) -> Result<(), FwErrors> {
         self.imdb_data = Some(self.imdb_lookup(client)?);
         Ok(())
+    }
+
+    fn imdb_data_owned(&mut self) -> Option<imdb::Title> {
+        self.imdb_data.take()
     }
 }
 
@@ -579,6 +585,7 @@ pub mod authenticated {
             fields[3] = title.as_ref();
             fields[9] = year.as_ref();
             let write_title = |file: &mut Writer<File>| {
+                dbg!("Exporting");
                 file.write_record(fields).unwrap();
             };
 
@@ -595,44 +602,44 @@ pub mod authenticated {
 
     impl Title for RatedTitle {
         fn url(&self) -> &String {
-            &self.title.url
+            self.title.url()
         }
 
         fn alter_titles(
             &mut self,
         ) -> Option<&mut priority_queue::PriorityQueue<AlternateTitle, u8>> {
-            self.title.alter_titles.as_mut()
+            self.title.alter_titles()
         }
 
         fn id(&self) -> u32 {
-            self.title.id
+            self.title.id()
         }
 
         fn title_pl(&self) -> &String {
-            &self.title.name
+            &self.title.title_pl()
         }
 
         fn title_type(&self) -> &FwTitleType {
-            &self.title.title_type
+            &self.title.title_type()
         }
 
         fn duration(&self) -> Option<u16> {
-            self.title.duration
+            self.title.duration()
         }
 
         fn year(&self) -> &Year {
-            &self.title.year
+            &self.title.year()
         }
         fn set_imdb_data_with_lookup(&mut self, client: &Client) -> Result<(), FwErrors> {
-            if self.title.imdb_data.is_none() {
-                self.title.imdb_data = Some(self.imdb_lookup(client)?);
-            }
-
-            Ok(())
+            self.title.set_imdb_data_with_lookup(client)
         }
 
         fn imdb_data(&self) -> Option<&imdb::Title> {
             self.title.imdb_data.as_ref()
+        }
+
+        fn imdb_data_owned(&mut self) -> Option<imdb::Title> {
+            self.title.imdb_data_owned()
         }
     }
 
