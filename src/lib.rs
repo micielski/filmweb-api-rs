@@ -595,7 +595,6 @@ pub mod authenticated {
             fields[3] = title.as_ref();
             fields[9] = year.as_ref();
             let write_title = |file: &mut Writer<File>| {
-                dbg!("Exporting");
                 file.write_record(fields).unwrap();
             };
 
