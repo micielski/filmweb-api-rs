@@ -2,13 +2,14 @@ pub mod error;
 pub mod imdb;
 mod utils;
 
+use core::fmt;
 pub use error::FwErrors;
 use priority_queue::PriorityQueue;
 use reqwest::blocking::Client;
 use reqwest::header;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
+use std::{fmt::Display, ops::Deref};
 use utils::ScrapedFwTitleData;
 
 const USER_AGENT: &str =
@@ -231,6 +232,15 @@ pub struct FwTitle {
 pub enum Year {
     OneYear(u16),
     Range(u16, u16),
+}
+
+impl Display for Year {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            Self::OneYear(year) => write!(f, "{}", year),
+            Self::Range(start, end) => write!(f, "{}-{}", start, end),
+        }
+    }
 }
 
 impl Title for FwTitle {
