@@ -98,9 +98,9 @@ pub mod filmweb {
         FwErrors, Html, PriorityQueue, ScrapedFwTitleData, Selector, Serialize, Title, TitleType,
         Year, USER_AGENT,
     };
-    pub struct FwGuestDriver(Client);
+    pub struct Filmweb(Client);
 
-    impl Deref for FwGuestDriver {
+    impl Deref for Filmweb {
         type Target = Client;
         fn deref(&self) -> &Self::Target {
             &self.0
@@ -202,7 +202,7 @@ pub mod filmweb {
         })
     }
 
-    impl FwGuestDriver {
+    impl Filmweb {
         pub fn scrape(&self, url: &str) -> Result<Vec<FwTitle>, FwErrors> {
             let res = self.get(url).send()?.text()?;
             debug_assert!(res.contains("preview__year"));
@@ -438,7 +438,7 @@ pub mod filmweb {
         use std::fs::File;
 
         #[derive(Debug)]
-        pub struct FwUserDriver {
+        pub struct FilmwebAuth {
             fw_client_pool: ClientPool,
             pub username: String,
             pub token: String,
@@ -744,7 +744,7 @@ pub mod filmweb {
             }
         }
 
-        impl FwUserDriver {
+        impl FilmwebAuth {
             pub fn new(token: String, session: String, jwt: String) -> Result<Self, FwErrors> {
                 let fw_client = FwClient::new(&token, &session, &jwt);
                 let username = Self::get_username(&fw_client).unwrap();
@@ -952,7 +952,7 @@ pub mod filmweb {
         #[test]
         fn creating_fwuser_and_username_checking_and_counts_querying() {
             let cookies = get_cookies();
-            let user = FwUserDriver::new(cookies.token, cookies.session, cookies.jwt).unwrap();
+            let user = FilmwebAuth::new(cookies.token, cookies.session, cookies.jwt).unwrap();
             let rated_films: Vec<FwRatedTitle> =
                 user.scrape(UserPage::RatedFilms(8)).unwrap().rated_titles;
             for film in rated_films {
