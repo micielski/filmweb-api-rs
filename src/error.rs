@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum FwErrors {
+pub enum FilmwebErrors {
     #[error("title not found")]
     ZeroResults,
     #[error("couldn't fetch duration")]
@@ -28,3 +28,6 @@ pub enum FwErrors {
         source: std::num::ParseIntError,
     },
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseYearError;

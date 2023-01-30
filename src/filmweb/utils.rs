@@ -1,5 +1,5 @@
-use super::FwGenre;
-use crate::{AlternateTitle, FwErrors, Year};
+use super::FilmwebGenre;
+use crate::{AlternateTitle, FilmwebErrors, Year};
 
 use priority_queue::PriorityQueue;
 use reqwest::blocking::Client;
@@ -7,12 +7,12 @@ use scraper::{ElementRef, Html, Selector};
 
 use super::STR_TO_GENRE;
 
-pub struct ScrapedFwTitleData {
+pub struct ScrapedFilmwebTitleData {
     pub id: u32,
     pub year: Year,
     pub name: String,
     pub url: String,
-    pub genres: Vec<FwGenre>,
+    pub genres: Vec<FilmwebGenre>,
     pub alter_titles: PriorityQueue<AlternateTitle, u8>,
     pub duration: Option<u16>, // in minutes
 }
@@ -20,7 +20,7 @@ pub struct ScrapedFwTitleData {
 pub fn parse_my_votebox(
     votebox: ElementRef,
     client: &Client,
-) -> Result<ScrapedFwTitleData, FwErrors> {
+) -> Result<ScrapedFilmwebTitleData, FilmwebErrors> {
     let id = votebox
         .select(&Selector::parse(".previewFilm").unwrap())
         .next()
@@ -51,7 +51,7 @@ pub fn parse_my_votebox(
             match year.trim().parse::<u16>() {
                 Ok(year) => Year::OneYear(year),
                 Err(_) => {
-                    return Err(FwErrors::InvalidYear {
+                    return Err(FilmwebErrors::InvalidYear {
                         title_id: id,
                         failed_year: year,
                     })
@@ -66,7 +66,7 @@ pub fn parse_my_votebox(
         .unwrap()
         .inner_html();
 
-    let genres: Vec<FwGenre> = votebox
+    let genres: Vec<FilmwebGenre> = votebox
         .select(&Selector::parse(".preview__detail--genres h3 a").unwrap())
         .into_iter()
         .inspect(|genre| {
@@ -116,7 +116,7 @@ pub fn parse_my_votebox(
                 Some,
             )
     };
-    Ok(ScrapedFwTitleData {
+    Ok(ScrapedFilmwebTitleData {
         id,
         year,
         genres,

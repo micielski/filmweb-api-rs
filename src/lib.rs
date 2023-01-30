@@ -15,15 +15,25 @@ pub mod imdb;
 
 mod utils;
 
-use std::fmt::{self, Display};
+use std::{
+    fmt::{self, Display},
+    str::FromStr,
+};
 
-use error::FwErrors;
+use error::{FilmwebErrors, ParseYearError};
 use imdb::IMDb;
 use priority_queue::PriorityQueue;
 use serde::{Deserialize, Serialize};
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:106.0) Gecko/20100101 Firefox/108.0";
+
+pub trait User {
+    fn username(&self) -> &String;
+    fn num_of_rated_movies(&self) -> u16;
+    fn num_of_rated_shows(&self) -> u16;
+    fn num_of_watchlisted_titles(&self) -> u16;
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TitleID {
@@ -62,30 +72,34 @@ impl Year {
             Self::Range(_, end) => end,
         }
     }
+}
 
-    /// Converts str to a year
-    ///
-    /// # Examples
-    /// ```
-    /// use filmed::Year;
-    /// let year1 = Year::from_str("(2015-2017)");
-    /// let year2 = Year::from_str("1984-2021");
-    /// let year3 = Year::from_str("2040");
-    /// assert_eq!((year1.start(), year1.end()), (2015, 2017));
-    /// assert_eq!((year2.start(), year2.end()), (1984, 2021));
-    /// assert_eq!(year3.start(), 2040);
-    /// ```
-    #[must_use]
-    pub fn from_str(year: &str) -> Year {
-        let dirty_year = year.trim_start_matches('(').trim_end_matches(')');
+/// Converts str to a year
+///
+/// # Examples
+/// ```
+/// use filmed::Year;
+/// let year1 = Year::from_str("(2015-2017)");
+/// let year2 = Year::from_str("1984-2021");
+/// let year3 = Year::from_str("2040");
+/// assert_eq!((year1.start(), year1.end()), (2015, 2017));
+/// assert_eq!((year2.start(), year2.end()), (1984, 2021));
+/// assert_eq!(year3.start(), 2040);
+/// ```
+impl FromStr for Year {
+    type Err = ParseYearError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let dirty_year = s.trim_start_matches('(').trim_end_matches(')');
         if dirty_year.contains('-') {
             let after_split: Vec<&str> = dirty_year.split('-').collect();
-            Year::Range(
+            Ok(Year::Range(
                 after_split[0].parse::<u16>().expect("it's a year"),
                 after_split[1].parse::<u16>().expect("it's a year"),
-            )
+            ))
         } else {
-            Year::OneYear(dirty_year.parse::<u16>().expect("it's a year"))
+            Ok(Year::OneYear(
+                dirty_year.parse::<u16>().expect("it's a year"),
+            ))
         }
     }
 }
@@ -248,13 +262,13 @@ pub trait AlternateTitles: Title {
 }
 
 pub trait IMDbLookup: Title + AlternateTitles {
-    fn set_imdb_data_with_lookup(&mut self, imdb: &IMDb) -> Result<(), FwErrors>;
+    fn set_imdb_data_with_lookup(&mut self, imdb: &IMDb) -> Result<(), FilmwebErrors>;
 
     fn imdb_data(&self) -> Option<&imdb::IMDbTitle>;
 
     fn imdb_data_owned(&mut self) -> Option<imdb::IMDbTitle>;
 
-    fn imdb_lookup(&mut self, imdb: &IMDb) -> Result<imdb::IMDbTitle, FwErrors> {
+    fn imdb_lookup(&mut self, imdb: &IMDb) -> Result<imdb::IMDbTitle, FilmwebErrors> {
         let year = match &mut self.year() {
             Year::OneYear(year) | Year::Range(year, _) => *year,
         };
@@ -274,7 +288,7 @@ pub trait IMDbLookup: Title + AlternateTitles {
                 return Ok(imdb_title);
             }
         }
-        Err(FwErrors::ZeroResults)
+        Err(FilmwebErrors::ZeroResults)
     }
 }
 
@@ -290,9 +304,9 @@ mod tests {
 
     #[test]
     fn parsing_a_year() {
-        let year1 = Year::from_str("(2015-2017)");
-        let year2 = Year::from_str("1984-2021");
-        let year3 = Year::from_str("2040");
+        let year1 = Year::from_str("(2015-2017)").expect("it's ok");
+        let year2 = Year::from_str("1984-2021").expect("it's ok");
+        let year3 = Year::from_str("2040").expect("it's ok");
         assert_eq!((year1.start(), year1.end()), (2015, 2017));
         assert_eq!((year2.start(), year2.end()), (1984, 2021));
         assert_eq!((year3.start(), year3.end()), (2040, 2040));

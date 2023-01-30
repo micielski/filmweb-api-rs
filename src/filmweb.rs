@@ -6,12 +6,12 @@ mod utils;
 use crate::imdb::IMDb;
 use crate::utils::create_client;
 use crate::{
-    imdb, AlternateTitle, AlternateTitles, FwErrors, Genre, IMDbLookup, Title, TitleID, TitleType,
-    Year, USER_AGENT,
+    imdb, AlternateTitle, AlternateTitles, FilmwebErrors, Genre, IMDbLookup, Title, TitleID,
+    TitleType, Year, USER_AGENT,
 };
 pub use auth::FilmwebUser;
 pub use query::{Query, QueryBuilder};
-use utils::{parse_my_votebox, ScrapedFwTitleData};
+use utils::{parse_my_votebox, ScrapedFilmwebTitleData};
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -25,10 +25,9 @@ use priority_queue::PriorityQueue;
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 
-pub struct Filmweb(Client);
-
+/// Enum containing all genres that occur on Filmweb
 #[derive(Debug, Clone, FromPrimitive, Copy)]
-pub enum FwGenre {
+pub enum FilmwebGenre {
     Action = 28,                   // Akcja
     AdultAnimation = 77,           // Animacja dla dorosłych
     Adventure = 20,                // Przygodowy
@@ -90,136 +89,143 @@ pub enum FwGenre {
     Youth = 41,                    // Dla młodzieży
 }
 
-impl TryFrom<FwGenre> for Genre {
+impl TryFrom<FilmwebGenre> for Genre {
     type Error = ();
     // TODO: to a hashmap
-    fn try_from(value: FwGenre) -> Result<Self, Self::Error> {
+    fn try_from(value: FilmwebGenre) -> Result<Self, Self::Error> {
         match value {
-            FwGenre::Action => Ok(Self::Action),
-            FwGenre::AdultAnimation | FwGenre::Animation | FwGenre::Anime => Ok(Self::Animation),
-            FwGenre::Adventure => Ok(Self::Adventure),
-            FwGenre::Biblical
-            | FwGenre::Historical
-            | FwGenre::Religious
-            | FwGenre::HistoricalDrama => Ok(Self::History),
-            FwGenre::Fantasy => Ok(Self::Fantasy),
-            FwGenre::Children
-            | FwGenre::Youth
-            | FwGenre::Family
-            | FwGenre::Christmas
-            | FwGenre::FairyTale => Ok(Self::Family),
-            FwGenre::Drama
-            | FwGenre::CourtroomDrama
-            | FwGenre::Melodrama
-            | FwGenre::Catastrophe
-            | FwGenre::Grotesque => Ok(Self::Drama),
-            FwGenre::Horror => Ok(Self::Horror),
-            FwGenre::Crime
-            | FwGenre::TrueCrime
-            | FwGenre::FilmNoir
-            | FwGenre::Gangster
-            | FwGenre::CriminalComedy => Ok(Self::Crime),
-            FwGenre::Comedy
-            | FwGenre::DarkComedy
-            | FwGenre::MoralComedy
-            | FwGenre::RomanticComedy => Ok(Self::Comedy),
-            FwGenre::Documentary
-            | FwGenre::Documented
-            | FwGenre::Biography
-            | FwGenre::Nature
-            | FwGenre::FictionalizedDocumentary => Ok(Self::Documentary),
-            FwGenre::Musical | FwGenre::Musically => Ok(Self::Music),
-            FwGenre::Romance => Ok(Self::Romance),
-            FwGenre::SciFi => Ok(Self::SciFi),
-            FwGenre::Spy | FwGenre::Surrealistic => Ok(Self::Mystery),
-            FwGenre::Thriller | FwGenre::Shiver | FwGenre::Sensational => Ok(Self::Thriller),
-            FwGenre::War => Ok(Self::War),
-            FwGenre::Western => Ok(Self::Western),
-            FwGenre::Costume
-            | FwGenre::XXX
-            | FwGenre::Short
-            | FwGenre::Erotical
-            | FwGenre::MartialArt
-            | FwGenre::Poetic
-            | FwGenre::Political
-            | FwGenre::Propaganda
-            | FwGenre::Moral
-            | FwGenre::Psychological
-            | FwGenre::Satire
-            | FwGenre::Silent
-            | FwGenre::Sports => Err(()),
+            FilmwebGenre::Action => Ok(Self::Action),
+            FilmwebGenre::AdultAnimation | FilmwebGenre::Animation | FilmwebGenre::Anime => {
+                Ok(Self::Animation)
+            }
+            FilmwebGenre::Adventure => Ok(Self::Adventure),
+            FilmwebGenre::Biblical
+            | FilmwebGenre::Historical
+            | FilmwebGenre::Religious
+            | FilmwebGenre::HistoricalDrama => Ok(Self::History),
+            FilmwebGenre::Fantasy => Ok(Self::Fantasy),
+            FilmwebGenre::Children
+            | FilmwebGenre::Youth
+            | FilmwebGenre::Family
+            | FilmwebGenre::Christmas
+            | FilmwebGenre::FairyTale => Ok(Self::Family),
+            FilmwebGenre::Drama
+            | FilmwebGenre::CourtroomDrama
+            | FilmwebGenre::Melodrama
+            | FilmwebGenre::Catastrophe
+            | FilmwebGenre::Grotesque => Ok(Self::Drama),
+            FilmwebGenre::Horror => Ok(Self::Horror),
+            FilmwebGenre::Crime
+            | FilmwebGenre::TrueCrime
+            | FilmwebGenre::FilmNoir
+            | FilmwebGenre::Gangster
+            | FilmwebGenre::CriminalComedy => Ok(Self::Crime),
+            FilmwebGenre::Comedy
+            | FilmwebGenre::DarkComedy
+            | FilmwebGenre::MoralComedy
+            | FilmwebGenre::RomanticComedy => Ok(Self::Comedy),
+            FilmwebGenre::Documentary
+            | FilmwebGenre::Documented
+            | FilmwebGenre::Biography
+            | FilmwebGenre::Nature
+            | FilmwebGenre::FictionalizedDocumentary => Ok(Self::Documentary),
+            FilmwebGenre::Musical | FilmwebGenre::Musically => Ok(Self::Music),
+            FilmwebGenre::Romance => Ok(Self::Romance),
+            FilmwebGenre::SciFi => Ok(Self::SciFi),
+            FilmwebGenre::Spy | FilmwebGenre::Surrealistic => Ok(Self::Mystery),
+            FilmwebGenre::Thriller | FilmwebGenre::Shiver | FilmwebGenre::Sensational => {
+                Ok(Self::Thriller)
+            }
+            FilmwebGenre::War => Ok(Self::War),
+            FilmwebGenre::Western => Ok(Self::Western),
+            FilmwebGenre::Costume
+            | FilmwebGenre::XXX
+            | FilmwebGenre::Short
+            | FilmwebGenre::Erotical
+            | FilmwebGenre::MartialArt
+            | FilmwebGenre::Poetic
+            | FilmwebGenre::Political
+            | FilmwebGenre::Propaganda
+            | FilmwebGenre::Moral
+            | FilmwebGenre::Psychological
+            | FilmwebGenre::Satire
+            | FilmwebGenre::Silent
+            | FilmwebGenre::Sports => Err(()),
         }
     }
 }
 
 lazy_static! {
-    static ref STR_TO_GENRE: HashMap<&'static str, FwGenre> = {
+    static ref STR_TO_GENRE: HashMap<&'static str, FilmwebGenre> = {
         HashMap::from([
-            ("akcja", FwGenre::Action),
-            ("animacja dla dorosłych", FwGenre::AdultAnimation),
-            ("animacja", FwGenre::Animation),
-            ("anime", FwGenre::Anime),
-            ("baśń", FwGenre::FairyTale),
-            ("biblijny", FwGenre::Biblical),
-            ("biograficzny", FwGenre::Biography),
-            ("czarna komedia", FwGenre::DarkComedy),
-            ("dla dzieci", FwGenre::Children),
-            ("dla młodzieży", FwGenre::Youth),
-            ("dokumentalizowany", FwGenre::Documented),
-            ("dokumentalny", FwGenre::Documentary),
-            ("dramat historyczny", FwGenre::HistoricalDrama),
-            ("dramat obyczajowy", FwGenre::Moral),
-            ("dramat sądowy", FwGenre::CourtroomDrama),
-            ("dramat", FwGenre::Drama),
-            ("dreszczowiec", FwGenre::Shiver),
-            ("erotyczny", FwGenre::Erotical),
-            ("fabularyzowany dok.", FwGenre::FictionalizedDocumentary),
-            ("familijny", FwGenre::Family),
-            ("fantasy", FwGenre::Fantasy),
-            ("film-noir", FwGenre::FilmNoir),
-            ("gangsterski", FwGenre::Gangster),
-            ("groteska filmowa", FwGenre::Grotesque),
-            ("historyczny", FwGenre::Historical),
-            ("horror", FwGenre::Horror),
-            ("katastroficzny", FwGenre::Catastrophe),
-            ("komedia kryminalna", FwGenre::CriminalComedy),
-            ("komedia obyczajowa", FwGenre::MoralComedy),
-            ("komedia romantyczna", FwGenre::RomanticComedy),
-            ("komedia rom.", FwGenre::RomanticComedy),
-            ("komedia", FwGenre::Comedy),
-            ("kostiumowy", FwGenre::Costume),
-            ("kryminał", FwGenre::Crime),
-            ("krótkometrażowy", FwGenre::Short),
-            ("melodramat", FwGenre::Melodrama),
-            ("musical", FwGenre::Musical),
-            ("muzyczny", FwGenre::Musically),
-            ("niemy", FwGenre::Silent),
-            ("obyczajowy", FwGenre::Moral),
-            ("poetycki", FwGenre::Poetic),
-            ("politiczny", FwGenre::Political),
-            ("propagandowy", FwGenre::Propaganda),
-            ("przygodowy", FwGenre::Adventure),
-            ("przyrodniczy", FwGenre::Nature),
-            ("psychologiczny", FwGenre::Psychological),
-            ("religijny", FwGenre::Religious),
-            ("romans", FwGenre::Romance),
-            ("satyra", FwGenre::Satire),
-            ("sci-fi", FwGenre::SciFi),
-            ("sensacyjny", FwGenre::Sensational),
-            ("sportowy", FwGenre::Sports),
-            ("surrealistyczny", FwGenre::Surrealistic),
-            ("szpiegowski", FwGenre::Spy),
-            ("sztuki walki", FwGenre::MartialArt),
-            ("thriller", FwGenre::Thriller),
-            ("true crime", FwGenre::TrueCrime),
-            ("western", FwGenre::Western),
-            ("wojenny", FwGenre::War),
-            ("xxx", FwGenre::XXX),
-            ("świąteczny", FwGenre::Christmas),
+            ("akcja", FilmwebGenre::Action),
+            ("animacja dla dorosłych", FilmwebGenre::AdultAnimation),
+            ("animacja", FilmwebGenre::Animation),
+            ("anime", FilmwebGenre::Anime),
+            ("baśń", FilmwebGenre::FairyTale),
+            ("biblijny", FilmwebGenre::Biblical),
+            ("biograficzny", FilmwebGenre::Biography),
+            ("czarna komedia", FilmwebGenre::DarkComedy),
+            ("dla dzieci", FilmwebGenre::Children),
+            ("dla młodzieży", FilmwebGenre::Youth),
+            ("dokumentalizowany", FilmwebGenre::Documented),
+            ("dokumentalny", FilmwebGenre::Documentary),
+            ("dramat historyczny", FilmwebGenre::HistoricalDrama),
+            ("dramat obyczajowy", FilmwebGenre::Moral),
+            ("dramat sądowy", FilmwebGenre::CourtroomDrama),
+            ("dramat", FilmwebGenre::Drama),
+            ("dreszczowiec", FilmwebGenre::Shiver),
+            ("erotyczny", FilmwebGenre::Erotical),
+            (
+                "fabularyzowany dok.",
+                FilmwebGenre::FictionalizedDocumentary,
+            ),
+            ("familijny", FilmwebGenre::Family),
+            ("fantasy", FilmwebGenre::Fantasy),
+            ("film-noir", FilmwebGenre::FilmNoir),
+            ("gangsterski", FilmwebGenre::Gangster),
+            ("groteska filmowa", FilmwebGenre::Grotesque),
+            ("historyczny", FilmwebGenre::Historical),
+            ("horror", FilmwebGenre::Horror),
+            ("katastroficzny", FilmwebGenre::Catastrophe),
+            ("komedia kryminalna", FilmwebGenre::CriminalComedy),
+            ("komedia obyczajowa", FilmwebGenre::MoralComedy),
+            ("komedia romantyczna", FilmwebGenre::RomanticComedy),
+            ("komedia rom.", FilmwebGenre::RomanticComedy),
+            ("komedia", FilmwebGenre::Comedy),
+            ("kostiumowy", FilmwebGenre::Costume),
+            ("kryminał", FilmwebGenre::Crime),
+            ("krótkometrażowy", FilmwebGenre::Short),
+            ("melodramat", FilmwebGenre::Melodrama),
+            ("musical", FilmwebGenre::Musical),
+            ("muzyczny", FilmwebGenre::Musically),
+            ("niemy", FilmwebGenre::Silent),
+            ("obyczajowy", FilmwebGenre::Moral),
+            ("poetycki", FilmwebGenre::Poetic),
+            ("politiczny", FilmwebGenre::Political),
+            ("propagandowy", FilmwebGenre::Propaganda),
+            ("przygodowy", FilmwebGenre::Adventure),
+            ("przyrodniczy", FilmwebGenre::Nature),
+            ("psychologiczny", FilmwebGenre::Psychological),
+            ("religijny", FilmwebGenre::Religious),
+            ("romans", FilmwebGenre::Romance),
+            ("satyra", FilmwebGenre::Satire),
+            ("sci-fi", FilmwebGenre::SciFi),
+            ("sensacyjny", FilmwebGenre::Sensational),
+            ("sportowy", FilmwebGenre::Sports),
+            ("surrealistyczny", FilmwebGenre::Surrealistic),
+            ("szpiegowski", FilmwebGenre::Spy),
+            ("sztuki walki", FilmwebGenre::MartialArt),
+            ("thriller", FilmwebGenre::Thriller),
+            ("true crime", FilmwebGenre::TrueCrime),
+            ("western", FilmwebGenre::Western),
+            ("wojenny", FilmwebGenre::War),
+            ("xxx", FilmwebGenre::XXX),
+            ("świąteczny", FilmwebGenre::Christmas),
         ])
     };
 }
-impl From<String> for FwGenre {
+impl From<String> for FilmwebGenre {
     fn from(value: String) -> Self {
         STR_TO_GENRE[value.trim().to_lowercase().as_str()]
     }
@@ -238,6 +244,9 @@ impl Default for Filmweb {
     }
 }
 
+/// Struct containing methods to query Filmweb
+pub struct Filmweb(Client);
+
 impl Filmweb {
     /// Returns a Filmweb struct to query Filmweb
     #[must_use]
@@ -246,7 +255,7 @@ impl Filmweb {
         Self(http_client)
     }
 
-    fn scrape_from_api(&self, api_url: &str) -> Result<Vec<FwTitle>, FwErrors> {
+    fn scrape_from_api(&self, api_url: &str) -> Result<Vec<FilmwebTitle>, FilmwebErrors> {
         log::trace!(target: "film_events", "api_url: {:?}", api_url);
 
         let search_results: SearchResults = {
@@ -254,7 +263,7 @@ impl Filmweb {
             serde_json::from_str(&res).unwrap()
         };
 
-        let scraped: Vec<FwTitle> = search_results
+        let scraped: Vec<FilmwebTitle> = search_results
             .search_hits
             .into_iter()
             .filter_map(|hit| {
@@ -285,14 +294,14 @@ impl Filmweb {
                         .map(|title| title.title)
                         .or_else(|| Some(preview_result.original_title.unwrap().title))
                         .unwrap();
-                    let genres: Vec<FwGenre> = preview_result
+                    let genres: Vec<FilmwebGenre> = preview_result
                         .genres
                         .into_iter()
-                        .map(|genre| FwGenre::from_u8(genre.id).unwrap())
+                        .map(|genre| FilmwebGenre::from_u8(genre.id).unwrap())
                         .collect();
                     let title_url =
                         format!("https://www.filmweb.pl/{typ}/{name}-{year}-{}", hit.id,);
-                    Some(FwTitle {
+                    Some(FilmwebTitle {
                         alter_titles: AlternateTitle::fw_get_titles(&title_url, &self.0).ok(),
                         name,
                         fw_genres: genres,
@@ -337,7 +346,7 @@ impl Filmweb {
     /// #    Ok(())
     /// # }
     /// ```
-    pub fn scrape(&self, query: &Query, page: u16) -> Result<Vec<FwTitle>, FwErrors> {
+    pub fn scrape(&self, query: &Query, page: u16) -> Result<Vec<FilmwebTitle>, FilmwebErrors> {
         let url = query.url(page);
         self.scrape_from_api(&url)
     }
@@ -345,11 +354,11 @@ impl Filmweb {
 
 /// Filmweb title struct with Title trait implemented, and other methods
 #[derive(Debug)]
-pub struct FwTitle {
+pub struct FilmwebTitle {
     url: String,
     id: TitleID,
     name: String,
-    fw_genres: Vec<FwGenre>,
+    fw_genres: Vec<FilmwebGenre>,
     genres: OnceCell<Vec<Genre>>,
     alter_titles: Option<PriorityQueue<AlternateTitle, u8>>,
     title_type: TitleType,
@@ -358,7 +367,7 @@ pub struct FwTitle {
     imdb_data: Option<imdb::IMDbTitle>,
 }
 
-impl Title for FwTitle {
+impl Title for FilmwebTitle {
     fn url(&self) -> &String {
         &self.url
     }
@@ -399,18 +408,18 @@ impl Title for FwTitle {
     }
 }
 
-impl AlternateTitles for FwTitle {
+impl AlternateTitles for FilmwebTitle {
     fn alter_titles(&mut self) -> Option<&mut PriorityQueue<AlternateTitle, u8>> {
         self.alter_titles.as_mut()
     }
 }
 
-impl IMDbLookup for FwTitle {
+impl IMDbLookup for FilmwebTitle {
     fn imdb_data(&self) -> Option<&imdb::IMDbTitle> {
         self.imdb_data.as_ref()
     }
 
-    fn set_imdb_data_with_lookup(&mut self, imdb: &IMDb) -> Result<(), FwErrors> {
+    fn set_imdb_data_with_lookup(&mut self, imdb: &IMDb) -> Result<(), FilmwebErrors> {
         self.imdb_data = Some(self.imdb_lookup(imdb)?);
         Ok(())
     }
@@ -440,7 +449,10 @@ impl AlternateTitle {
         }
     }
 
-    pub fn fw_get_titles(url: &str, client: &Client) -> Result<PriorityQueue<Self, u8>, FwErrors> {
+    pub fn fw_get_titles(
+        url: &str,
+        client: &Client,
+    ) -> Result<PriorityQueue<Self, u8>, FilmwebErrors> {
         let response = client.get(url).send().unwrap().text()?;
         let document = Html::parse_document(&response);
         let select_titles = Selector::parse(".filmTitlesSection__title").unwrap();
@@ -462,10 +474,10 @@ impl AlternateTitle {
 
 #[cfg(test)]
 mod tests {
-    use crate::filmweb::auth::{FilmwebUser, FwRatedTitle, UserPage};
+    use crate::filmweb::auth::{FilmwebRatedTitle, FilmwebUser, UserPage};
     use crate::filmweb::query::QueryBuilder;
-    use crate::filmweb::{Filmweb, FwGenre};
-    use crate::{Title, TitleType, Year};
+    use crate::filmweb::{Filmweb, FilmwebGenre};
+    use crate::{Title, TitleType, User, Year};
     use std::env;
 
     struct Cookies {
@@ -493,7 +505,11 @@ mod tests {
         let fw = Filmweb::new();
         let query = QueryBuilder::new()
             .year(Year::new(2021, 2021))
-            .genres(vec![FwGenre::Comedy, FwGenre::Drama, FwGenre::SciFi])
+            .genres(vec![
+                FilmwebGenre::Comedy,
+                FilmwebGenre::Drama,
+                FilmwebGenre::SciFi,
+            ])
             .build();
         let fw_search_result = fw.scrape(&query, 1).unwrap();
 
@@ -507,12 +523,12 @@ mod tests {
     fn creating_fwuser_and_username_checking_and_counts_querying() {
         let cookies = get_cookies();
         let user = FilmwebUser::new(cookies.token, cookies.session, cookies.jwt).unwrap();
-        let rated_films: Vec<FwRatedTitle> =
+        let rated_films: Vec<FilmwebRatedTitle> =
             user.scrape(UserPage::RatedFilms(2)).unwrap().rated_titles;
 
         assert!(!rated_films.is_empty());
         assert!(!user.username().is_empty());
-        assert!(user.counts.movies > 0);
-        assert_eq!(cookies.username, user.username);
+        assert!(user.num_of_rated_movies() > 0);
+        assert_eq!(cookies.username, *user.username());
     }
 }

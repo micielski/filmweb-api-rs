@@ -1,10 +1,10 @@
-use super::FwGenre;
+use super::FilmwebGenre;
 use crate::Year;
 
 #[derive(Debug, Clone)]
 pub struct QueryBuilder {
     year: Option<Year>,
-    genres: Option<Vec<FwGenre>>,
+    genres: Option<Vec<FilmwebGenre>>,
 }
 
 impl QueryBuilder {
@@ -23,7 +23,7 @@ impl QueryBuilder {
     }
 
     #[must_use]
-    pub fn genres(mut self, genres: Vec<FwGenre>) -> Self {
+    pub fn genres(mut self, genres: Vec<FilmwebGenre>) -> Self {
         self.genres = Some(genres);
         self
     }
@@ -88,7 +88,7 @@ mod tests {
     fn creating_query_with_year_and_genres() {
         let query = QueryBuilder::new()
             .year(Year::new(2010, 2017))
-            .genres(vec![FwGenre::Thriller, FwGenre::Psychological])
+            .genres(vec![FilmwebGenre::Thriller, FilmwebGenre::Psychological])
             .build();
 
         assert_eq!("https://www.filmweb.pl/api/v1/films/search?startYear=2010&endYear=2017&genres=24,38&connective=OR&page=10", query.url(10));
@@ -98,7 +98,11 @@ mod tests {
     fn creating_query_with_year_and_genres2() {
         let query = QueryBuilder::new()
             .year(Year::new(2021, 2021))
-            .genres(vec![FwGenre::Comedy, FwGenre::Drama, FwGenre::SciFi])
+            .genres(vec![
+                FilmwebGenre::Comedy,
+                FilmwebGenre::Drama,
+                FilmwebGenre::SciFi,
+            ])
             .build();
         assert_eq!("https://www.filmweb.pl/api/v1/films/search?startYear=2021&endYear=2021&genres=13,6,33&connective=OR&page=1", query.url(1));
     }

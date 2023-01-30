@@ -1,5 +1,6 @@
-use super::FwErrors;
+use super::FilmwebErrors;
 use crate::{utils::create_client, Genre, Title, TitleID, TitleType, Year};
+use std::str::FromStr;
 
 use once_cell::sync::OnceCell;
 use regex::Regex;
@@ -72,7 +73,7 @@ impl IMDb {
         Self(create_client().expect("can create a client"))
     }
 
-    fn parse_imdb_title_page(&self, id: &str) -> Result<ScrapedIMDbTitlePageData, FwErrors> {
+    fn parse_imdb_title_page(&self, id: &str) -> Result<ScrapedIMDbTitlePageData, FilmwebErrors> {
         let title_url = format!("https://www.imdb.com/title/{id}/");
         let title_document = {
             let response = self.0.get(&title_url).send()?.text()?;
@@ -106,7 +107,7 @@ impl IMDb {
         }
 
         if dirty_duration.len() > 40 {
-            return Err(FwErrors::InvalidDuration);
+            return Err(FilmwebErrors::InvalidDuration);
         }
 
         // Example of dirty_duration: 1<!-- -->h<!-- --> <!-- -->33<!-- -->m<
@@ -168,7 +169,7 @@ impl IMDb {
             log::info!(
             "Failed to get a match in Fn get_imdb_data_advanced for {title} {year_start} on {search_page_url}"
         );
-            return Err(Box::new(FwErrors::ZeroResults));
+            return Err(Box::new(FilmwebErrors::ZeroResults));
         };
 
         let id = {
@@ -195,7 +196,7 @@ impl IMDb {
                 .next()
                 .unwrap()
                 .inner_html();
-            Year::from_str(&dirty_year)
+            Year::from_str(&dirty_year).expect("IMDb didn't changed since")
         };
 
         let ScrapedIMDbTitlePageData {
@@ -231,35 +232,19 @@ impl IMDb {
             title.inner_html()
         } else {
             log::info!("No results in Fn get_imdb_data for {title} on {url_query}");
-            return Err(Box::new(FwErrors::ZeroResults));
+            return Err(Box::new(FilmwebErrors::ZeroResults));
         };
 
         let year = Year::from_str(
             &document
-                .select(&Selector::parse(".ipc-metadata-list-summary-item__li").unwrap())
+                .select(
+                    &Selector::parse(".ipc-metadata-list-summary-item__li").expect("selector ok"),
+                )
                 .next()
                 .expect("selector is ok")
                 .inner_html(),
-        );
-
-        // let id = if let Some(id) = document
-        //     .select(&Selector::parse(".result_text").unwrap())
-        //     .next()
-        // {
-        //     let title_id = id.inner_html();
-        //     let re = Regex::new(r"(\d{7,8})").unwrap();
-        //     format!(
-        //         "tt{:0>7}",
-        //         re.captures(title_id.as_str())
-        //             .unwrap()
-        //             .get(0)
-        //             .unwrap()
-        //             .as_str()
-        //     )
-        // } else {
-        //     log::info!("No results in Fn get_imdb_data for {title} {year} on {url_query}");
-        //     return Err(Box::new(FwErrors::ZeroResults));
-        // };
+        )
+        .expect("IMDb haven't changed since");
 
         // Should give something like: /title/tt4158110/?ref_=fn_al_tt_1
         let dirty_id = document

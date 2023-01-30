@@ -1,9 +1,11 @@
 /// Module containing logged-in user related things.
-use crate::{imdb::IMDb, utils::ClientPool, AlternateTitles, IMDbLookup, RatedTitle, TitleID};
+use crate::{
+    imdb::IMDb, utils::ClientPool, AlternateTitles, IMDbLookup, RatedTitle, TitleID, User,
+};
 
 use super::{
-    imdb, parse_my_votebox, AlternateTitle, Deref, FwErrors, FwTitle, ScrapedFwTitleData, Title,
-    TitleType, Year, USER_AGENT,
+    imdb, parse_my_votebox, AlternateTitle, Deref, FilmwebErrors, FilmwebTitle,
+    ScrapedFilmwebTitleData, Title, TitleType, Year, USER_AGENT,
 };
 use csv::Writer;
 use once_cell::sync::OnceCell;
@@ -16,16 +18,13 @@ use std::fs::File;
 #[derive(Debug)]
 pub struct FilmwebUser {
     fw_client_pool: ClientPool,
-    pub username: String,
-    pub token: String,
-    pub session: String,
-    pub jwt: String,
-    pub counts: FwUserCounts,
+    username: String,
+    counts: FilmwebUserCounts,
 }
 
 #[derive(Debug)]
 pub struct RatedPage {
-    pub rated_titles: Vec<FwRatedTitle>,
+    pub rated_titles: Vec<FilmwebRatedTitle>,
 }
 
 #[derive(Debug)]
@@ -84,13 +83,13 @@ impl Default for ExportFiles {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FwUserCounts {
+pub struct FilmwebUserCounts {
     pub movies: u16,
     pub shows: u16,
     pub watchlist: u16,
 }
 
-impl FwUserCounts {
+impl FilmwebUserCounts {
     #[must_use]
     pub const fn movies_pages(&self) -> u8 {
         (self.movies / 25 + 1) as u8
@@ -106,7 +105,7 @@ impl FwUserCounts {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FwApiDetails {
+pub struct FilmwebApiDetails {
     pub rate: u8,
     pub favorite: bool,
     #[serde(rename = "viewDate")]
@@ -114,10 +113,10 @@ pub struct FwApiDetails {
     pub timestamp: u128,
 }
 
-/// Enum that defines a url of rated titles or watchlisted titles.
-/// RatedFilms(2) would be filmweb.pl/user/{USERNAME}/films?page=2
-/// RatedShows(4) filmweb.pl/user/{USERNAME}/serials?page=4
-/// Watchlist(6) filmweb.pl/user/{USERNAME}/wantToSee?page=6
+/// Enum that defines a url of rated titles or watchlisted titles.  
+/// RatedFilms(2) would look like filmweb.pl/user/{USERNAME}/films?page=2  
+/// RatedShows(4) filmweb.pl/user/{USERNAME}/serials?page=4  
+/// Watchlist(6) filmweb.pl/user/{USERNAME}/wantToSee?page=6  
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UserPage {
     RatedFilms(u8),
@@ -125,10 +124,10 @@ pub enum UserPage {
     Watchlist(u8),
 }
 
-/// Enum that defines type of a user page.
-/// `RatedFilms` would be filmweb.pl/user/{USERNAME}/films
-/// `RatedShows` filmweb.pl/user/{USERNAME}/serials
-/// `Watchlist` filmweb.pl/user/{USERNAME}/wantToSee
+/// Enum that defines type of a user page.  
+/// `RatedFilms` would look like filmweb.pl/user/{USERNAME}/films  
+/// `RatedShows` filmweb.pl/user/{USERNAME}/serials  
+/// `Watchlist` filmweb.pl/user/{USERNAME}/wantToSee  
 #[derive(Copy, Clone, Deserialize, Serialize, Debug, PartialEq, Eq, Hash)]
 pub enum UserPageType {
     RatedFilms,
@@ -165,14 +164,14 @@ impl From<UserPage> for UserPageType {
     }
 }
 #[derive(Debug)]
-pub struct FwRatedTitle {
-    title: FwTitle,
+pub struct FilmwebRatedTitle {
+    title: FilmwebTitle,
     rating: Option<u8>,
     is_favorited: bool,
     is_watchlisted: bool,
 }
 
-impl RatedTitle for FwRatedTitle {
+impl RatedTitle for FilmwebRatedTitle {
     fn rating(&self) -> Option<u8> {
         self.rating
     }
@@ -186,8 +185,13 @@ impl RatedTitle for FwRatedTitle {
     }
 }
 
-impl FwRatedTitle {
-    const fn new(title: FwTitle, rating: Option<u8>, favorited: bool, watchlisted: bool) -> Self {
+impl FilmwebRatedTitle {
+    const fn new(
+        title: FilmwebTitle,
+        rating: Option<u8>,
+        favorited: bool,
+        watchlisted: bool,
+    ) -> Self {
         Self {
             title,
             rating,
@@ -237,7 +241,7 @@ impl FwRatedTitle {
     }
 }
 
-impl Title for FwRatedTitle {
+impl Title for FilmwebRatedTitle {
     fn url(&self) -> &String {
         self.title.url()
     }
@@ -267,14 +271,14 @@ impl Title for FwRatedTitle {
     }
 }
 
-impl AlternateTitles for FwRatedTitle {
+impl AlternateTitles for FilmwebRatedTitle {
     fn alter_titles(&mut self) -> Option<&mut priority_queue::PriorityQueue<AlternateTitle, u8>> {
         self.title.alter_titles()
     }
 }
 
-impl IMDbLookup for FwRatedTitle {
-    fn set_imdb_data_with_lookup(&mut self, imdb: &IMDb) -> Result<(), FwErrors> {
+impl IMDbLookup for FilmwebRatedTitle {
+    fn set_imdb_data_with_lookup(&mut self, imdb: &IMDb) -> Result<(), FilmwebErrors> {
         self.title.set_imdb_data_with_lookup(imdb)
     }
 
@@ -289,16 +293,16 @@ impl IMDbLookup for FwRatedTitle {
 
 /// Reqwest client but with JWT,
 #[derive(Debug, Clone)]
-struct FwUserHttpClient(Client);
+struct FilmwebUserHttpClient(Client);
 
-impl Deref for FwUserHttpClient {
+impl Deref for FilmwebUserHttpClient {
     type Target = Client;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl FwUserHttpClient {
+impl FilmwebUserHttpClient {
     pub fn new(token: &str, session: &str, jwt: &str) -> Self {
         let cookies = format!(
             "_fwuser_token={}; _fwuser_sessionId={}; JWT={};",
@@ -338,26 +342,23 @@ impl FwUserHttpClient {
 }
 
 impl FilmwebUser {
-    pub fn new<T: ToString>(token: T, session: T, jwt: T) -> Result<Self, FwErrors> {
+    pub fn new<T: ToString>(token: T, session: T, jwt: T) -> Result<Self, FilmwebErrors> {
         let token = token.to_string();
         let session = session.to_string();
         let jwt = jwt.to_string();
-        let fw_client = FwUserHttpClient::new(&token, &session, &jwt);
+        let fw_client = FilmwebUserHttpClient::new(&token, &session, &jwt);
         let username = Self::get_username(&fw_client).unwrap();
         let counts = Self::rated_titles_counts(&username, &fw_client).unwrap();
         let fw_client_pool = ClientPool::new(fw_client.into_client(), 3);
         let user = Self {
             fw_client_pool,
             username,
-            token,
-            session,
-            jwt,
             counts,
         };
         Ok(user)
     }
 
-    pub fn scrape(&self, page: UserPage) -> Result<RatedPage, FwErrors> {
+    pub fn scrape(&self, page: UserPage) -> Result<RatedPage, FilmwebErrors> {
         let mut rated_titles: Vec<_> = Vec::new();
         let url = page.user_url(&self.username);
         let res = self.fw_client_pool.get(url).send()?.text()?;
@@ -367,7 +368,7 @@ impl FilmwebUser {
 
         let document = Html::parse_document(&res);
         for votebox in document.select(&Selector::parse("div.myVoteBox").unwrap()) {
-            let ScrapedFwTitleData {
+            let ScrapedFilmwebTitleData {
                 id,
                 year,
                 genres: fw_genres,
@@ -410,18 +411,18 @@ impl FilmwebUser {
                     UserPage::Watchlist(_) => None,
                 };
                 match api_response {
-                    Some(response) => match response?.json::<FwApiDetails>() {
+                    Some(response) => match response?.json::<FilmwebApiDetails>() {
                         Ok(v) => (Some(v.rate), v.favorite, false),
                         Err(e) => {
                             log::info!("Bad Filmweb's api response: {e}");
-                            return Err(FwErrors::InvalidJwt);
+                            return Err(FilmwebErrors::InvalidJwt);
                         }
                     },
                     None => (None, false, true),
                 }
             };
 
-            let unrated_title = FwTitle {
+            let unrated_title = FilmwebTitle {
                 id: TitleID::FilmwebID(id),
                 url: url.clone(),
                 title_type,
@@ -434,7 +435,7 @@ impl FilmwebUser {
                 imdb_data: None,
             };
 
-            rated_titles.push(FwRatedTitle::new(
+            rated_titles.push(FilmwebRatedTitle::new(
                 unrated_title,
                 rating,
                 is_favorited,
@@ -448,8 +449,8 @@ impl FilmwebUser {
     fn rated_movies_count(
         username: &String,
         title_type: UserPageType,
-        fw_client: &FwUserHttpClient,
-    ) -> Result<u16, FwErrors> {
+        fw_client: &FilmwebUserHttpClient,
+    ) -> Result<u16, FilmwebErrors> {
         let fetch = |title_type: &'static str, title_type2: &'static str| -> u16 {
             let url = format!(
                 "https://www.filmweb.pl/api/v1/user/{}/{}/{}/count",
@@ -475,18 +476,37 @@ impl FilmwebUser {
 
     fn rated_titles_counts(
         username: &String,
-        fw_client: &FwUserHttpClient,
-    ) -> Result<FwUserCounts, Box<dyn std::error::Error>> {
+        fw_client: &FilmwebUserHttpClient,
+    ) -> Result<FilmwebUserCounts, Box<dyn std::error::Error>> {
         let movies = Self::rated_movies_count(username, UserPageType::RatedFilms, fw_client)?;
         let shows = Self::rated_movies_count(username, UserPageType::RatedShows, fw_client)?;
         let watchlist = Self::rated_movies_count(username, UserPageType::Watchlist, fw_client)?;
-        Ok(FwUserCounts {
+        Ok(FilmwebUserCounts {
             movies,
             shows,
             watchlist,
         })
     }
 
+    fn get_username(fw_client: &FilmwebUserHttpClient) -> Result<String, FilmwebErrors> {
+        let res = fw_client
+            .get("https://www.filmweb.pl/settings")
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        let document = Html::parse_document(&res);
+        document
+            .select(&Selector::parse(".mainSettings__groupItemStateContent").unwrap())
+            .nth(2)
+            .map_or_else(
+                || Err(FilmwebErrors::InvalidCredentials),
+                |username_tag| Ok(username_tag.inner_html().trim().to_owned()),
+            )
+    }
+}
+
+impl User for FilmwebUser {
     /// Returns user's username
     ///
     /// # Examples
@@ -502,25 +522,19 @@ impl FilmwebUser {
     /// #    Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub const fn username(&self) -> &String {
+    fn username(&self) -> &String {
         &self.username
     }
 
-    fn get_username(fw_client: &FwUserHttpClient) -> Result<String, FwErrors> {
-        let res = fw_client
-            .get("https://www.filmweb.pl/settings")
-            .send()
-            .unwrap()
-            .text()
-            .unwrap();
-        let document = Html::parse_document(&res);
-        document
-            .select(&Selector::parse(".mainSettings__groupItemStateContent").unwrap())
-            .nth(2)
-            .map_or_else(
-                || Err(FwErrors::InvalidCredentials),
-                |username_tag| Ok(username_tag.inner_html().trim().to_owned()),
-            )
+    fn num_of_rated_movies(&self) -> u16 {
+        self.counts.movies
+    }
+
+    fn num_of_rated_shows(&self) -> u16 {
+        self.counts.shows
+    }
+
+    fn num_of_watchlisted_titles(&self) -> u16 {
+        self.counts.watchlist
     }
 }
