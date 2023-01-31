@@ -29,5 +29,22 @@ pub enum FilmwebErrors {
     },
 }
 
+#[derive(Error, Debug)]
+pub enum ScrapeError {
+    #[error("failed sending a request: {}", .source)]
+    NetworkError {
+        #[from]
+        source: reqwest::Error,
+    },
+    #[error("Filmweb API has changed and so the crate is outdated")]
+    Outdated {
+        #[from]
+        source: serde_json::Error,
+    },
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseYearError;
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseGenreError;

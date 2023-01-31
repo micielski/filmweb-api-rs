@@ -348,7 +348,7 @@ impl FilmwebUser {
         let jwt = jwt.to_string();
         let fw_client = FilmwebUserHttpClient::new(&token, &session, &jwt);
         let username = Self::get_username(&fw_client).unwrap();
-        let counts = Self::rated_titles_counts(&username, &fw_client).unwrap();
+        let counts = Self::rated_counts(&username, &fw_client).unwrap();
         let fw_client_pool = ClientPool::new(fw_client.into_client(), 3);
         let user = Self {
             fw_client_pool,
@@ -446,45 +446,32 @@ impl FilmwebUser {
         Ok(RatedPage { rated_titles })
     }
 
-    fn rated_movies_count(
-        username: &String,
-        title_type: UserPageType,
+    fn fetch_rated_count(
+        username: &str,
+        title_type: &'static str,
+        title_type2: &'static str,
         fw_client: &FilmwebUserHttpClient,
     ) -> Result<u16, FilmwebErrors> {
-        let fetch = |title_type: &'static str, title_type2: &'static str| -> u16 {
-            let url = format!(
-                "https://www.filmweb.pl/api/v1/user/{}/{}/{}/count",
-                username, title_type, title_type2
-            );
-            fw_client
-                .get(url)
-                .send()
-                .unwrap()
-                .text()
-                .unwrap()
-                .parse::<u16>()
-                .unwrap()
-        };
-        let count = match title_type {
-            UserPageType::RatedFilms => fetch("votes", "film"),
-            UserPageType::RatedShows => fetch("votes", "serial"),
-            UserPageType::Watchlist => fetch("want2see", "film") + fetch("want2see", "serial"),
-        };
-
-        Ok(count)
+        let url = format!(
+            "https://www.filmweb.pl/api/v1/user/{}/{}/{}/count",
+            username, title_type, title_type2
+        );
+        Ok(fw_client.get(url).send().unwrap().text()?.parse::<u16>()?)
     }
 
-    fn rated_titles_counts(
+    fn rated_counts(
         username: &String,
         fw_client: &FilmwebUserHttpClient,
-    ) -> Result<FilmwebUserCounts, Box<dyn std::error::Error>> {
-        let movies = Self::rated_movies_count(username, UserPageType::RatedFilms, fw_client)?;
-        let shows = Self::rated_movies_count(username, UserPageType::RatedShows, fw_client)?;
-        let watchlist = Self::rated_movies_count(username, UserPageType::Watchlist, fw_client)?;
+    ) -> Result<FilmwebUserCounts, FilmwebErrors> {
+        let rated_movies_count = Self::fetch_rated_count(username, "votes", "film", fw_client)?;
+        let rated_shows_count = Self::fetch_rated_count(username, "votes", "serial", fw_client)?;
+        let watchlisted_count = Self::fetch_rated_count(username, "want2see", "film", fw_client)?
+            + Self::fetch_rated_count(username, "want2see", "serial", fw_client)?;
+
         Ok(FilmwebUserCounts {
-            movies,
-            shows,
-            watchlist,
+            movies: rated_movies_count,
+            shows: rated_shows_count,
+            watchlist: watchlisted_count,
         })
     }
 

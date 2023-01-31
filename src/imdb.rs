@@ -53,6 +53,12 @@ impl Title for IMDbTitle {
 
 pub struct IMDb(Client);
 
+impl Default for IMDb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IMDb {
     /// Returns a queryable `IMDb` struct
     ///
@@ -69,6 +75,7 @@ impl IMDb {
     /// #     Ok(())
     /// # }
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self(create_client().expect("can create a client"))
     }
@@ -76,7 +83,7 @@ impl IMDb {
     fn parse_imdb_title_page(&self, id: &str) -> Result<ScrapedIMDbTitlePageData, FilmwebErrors> {
         let title_url = format!("https://www.imdb.com/title/{id}/");
         let title_document = {
-            let response = self.0.get(&title_url).send()?.text()?;
+            let response = self.0.get(title_url).send()?.text()?;
             Html::parse_document(&response)
         };
 
@@ -161,7 +168,7 @@ impl IMDb {
         };
 
         let title_data = if let Some(id) = search_document
-            .select(&Selector::parse("div.lister-item-image").unwrap())
+            .select(&Selector::parse("div.lister-item-image").expect("selector ok"))
             .next()
         {
             id
@@ -174,7 +181,7 @@ impl IMDb {
 
         let id = {
             let id = title_data.inner_html();
-            let regex = Regex::new(r"(\d{7,8})").unwrap();
+            let regex = Regex::new(r"(\d{7,8})").expect("regex ok");
             format!("tt{:0>7}", &regex.captures(&id).unwrap()[0])
                 .trim()
                 .to_string()
@@ -226,7 +233,7 @@ impl IMDb {
         };
 
         let title = if let Some(title) = document
-            .select(&Selector::parse(".ipc-metadata-list-summary-item__t").unwrap())
+            .select(&Selector::parse(".ipc-metadata-list-summary-item__t").expect("selector ok"))
             .next()
         {
             title.inner_html()
@@ -253,7 +260,7 @@ impl IMDb {
             .unwrap()
             .value()
             .attr("href")
-            .unwrap();
+            .unwrap(); // TODO: return Outdated err
         let regex_id = Regex::new(r"(\d{7,8})").unwrap();
         let id = format!(
             "tt{:0>7}",

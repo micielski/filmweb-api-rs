@@ -128,6 +128,4 @@ pub fn parse_my_votebox(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

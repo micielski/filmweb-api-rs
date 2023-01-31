@@ -92,12 +92,12 @@ impl FromStr for Year {
         let dirty_year = s.trim_start_matches('(').trim_end_matches(')');
         if dirty_year.contains('-') {
             let after_split: Vec<&str> = dirty_year.split('-').collect();
-            Ok(Year::Range(
+            Ok(Self::Range(
                 after_split[0].parse::<u16>().expect("it's a year"),
                 after_split[1].parse::<u16>().expect("it's a year"),
             ))
         } else {
-            Ok(Year::OneYear(
+            Ok(Self::OneYear(
                 dirty_year.parse::<u16>().expect("it's a year"),
             ))
         }

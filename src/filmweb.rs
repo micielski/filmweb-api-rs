@@ -3,6 +3,7 @@ mod json;
 pub mod query;
 mod utils;
 
+use crate::error::{ParseGenreError, ScrapeError};
 use crate::imdb::IMDb;
 use crate::utils::create_client;
 use crate::{
@@ -90,7 +91,7 @@ pub enum FilmwebGenre {
 }
 
 impl TryFrom<FilmwebGenre> for Genre {
-    type Error = ();
+    type Error = ParseGenreError;
     // TODO: to a hashmap
     fn try_from(value: FilmwebGenre) -> Result<Self, Self::Error> {
         match value {
@@ -150,7 +151,7 @@ impl TryFrom<FilmwebGenre> for Genre {
             | FilmwebGenre::Psychological
             | FilmwebGenre::Satire
             | FilmwebGenre::Silent
-            | FilmwebGenre::Sports => Err(()),
+            | FilmwebGenre::Sports => Err(ParseGenreError),
         }
     }
 }
@@ -255,70 +256,60 @@ impl Filmweb {
         Self(http_client)
     }
 
-    fn scrape_from_api(&self, api_url: &str) -> Result<Vec<FilmwebTitle>, FilmwebErrors> {
+    fn scrape_from_api(&self, api_url: &str) -> Result<Vec<FilmwebTitle>, ScrapeError> {
         log::trace!(target: "film_events", "api_url: {:?}", api_url);
 
+        let mut found_titles: Vec<FilmwebTitle> = Vec::new();
         let search_results: SearchResults = {
             let res = self.get(api_url).send()?.text()?;
             serde_json::from_str(&res).unwrap()
         };
 
-        let scraped: Vec<FilmwebTitle> = search_results
-            .search_hits
-            .into_iter()
-            .filter_map(|hit| {
-                log::debug!(target: "film_parsing", "hit.hit_type: {:?}", &hit.hit_type);
-                if let Type::Film | Type::Serial = hit.hit_type {
-                    // TODO: impl Display
-                    let (typ, title_type) = match hit.hit_type {
-                        Type::Film => ("film", TitleType::Movie),
-                        // According to the API show is a film, may change in the future
-                        Type::Serial => ("film", TitleType::Show),
-                        _ => panic!(),
-                    };
+        for hit in search_results.search_hits {
+            if let Type::Film | Type::Serial = hit.hit_type {
+                let (title_type_str, title_type) = match hit.hit_type {
+                    Type::Film => ("film", TitleType::Movie),
+                    Type::Serial => ("film", TitleType::Show),
+                    _ => panic!(),
+                };
 
-                    let film_preview_req =
-                        format!("https://www.filmweb.pl/api/v1/{typ}/{}/preview", hit.id);
-                    log::trace!(target: "film_events", "film_preview_request: {:?}", film_preview_req);
-                    let film_preview_res = self
-                        .get(film_preview_req)
-                        .send()
-                        .unwrap()
-                        .text()
-                        .unwrap();
-                    log::debug!(target: "film_api_responses", "film_preview_res: {:?}", film_preview_res);
-                    let preview_result: Preview = serde_json::from_str(&film_preview_res).unwrap();
-                    let year = preview_result.year;
-                    let name = preview_result
-                        .title
-                        .map(|title| title.title)
-                        .or_else(|| Some(preview_result.original_title.unwrap().title))
-                        .unwrap();
-                    let genres: Vec<FilmwebGenre> = preview_result
-                        .genres
-                        .into_iter()
-                        .map(|genre| FilmwebGenre::from_u8(genre.id).unwrap())
-                        .collect();
-                    let title_url =
-                        format!("https://www.filmweb.pl/{typ}/{name}-{year}-{}", hit.id,);
-                    Some(FilmwebTitle {
-                        alter_titles: AlternateTitle::fw_get_titles(&title_url, &self.0).ok(),
-                        name,
-                        fw_genres: genres,
-                        genres: OnceCell::new(),
-                        id: TitleID::FilmwebID(hit.id),
-                        year: year.into(),
-                        duration: Some(preview_result.duration),
-                        title_type,
-                        imdb_data: None,
-                        url: title_url,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-        Ok(scraped)
+                let film_preview_req_url = format!(
+                    "https://www.filmweb.pl/api/v1/{title_type_str}/{}/preview",
+                    hit.id
+                );
+                let film_preview_res = self.get(film_preview_req_url).send()?.text()?;
+                let preview_result: Preview = serde_json::from_str(&film_preview_res)?;
+                let year = preview_result.year;
+                let name = preview_result
+                    .title
+                    .map(|title| title.title)
+                    .or_else(|| Some(preview_result.original_title.unwrap().title))
+                    .expect("it'll always be some");
+                let genres: Vec<FilmwebGenre> = preview_result
+                    .genres
+                    .into_iter()
+                    .map(|genre| FilmwebGenre::from_u8(genre.id).unwrap())
+                    .collect();
+                let title_url = format!(
+                    "https://www.filmweb.pl/{title_type_str}/{name}-{year}-{}",
+                    hit.id
+                );
+                let title = FilmwebTitle {
+                    alter_titles: AlternateTitle::fw_get_titles(&title_url, &self.0).ok(),
+                    name,
+                    fw_genres: genres,
+                    genres: OnceCell::new(),
+                    id: TitleID::FilmwebID(hit.id),
+                    year: year.into(),
+                    duration: Some(preview_result.duration),
+                    title_type,
+                    imdb_data: None,
+                    url: title_url,
+                };
+                found_titles.push(title);
+            }
+        }
+        Ok(found_titles)
     }
 
     /// Scrapes Filmweb's database with a given query
@@ -346,7 +337,7 @@ impl Filmweb {
     /// #    Ok(())
     /// # }
     /// ```
-    pub fn scrape(&self, query: &Query, page: u16) -> Result<Vec<FilmwebTitle>, FilmwebErrors> {
+    pub fn scrape(&self, query: &Query, page: u16) -> Result<Vec<FilmwebTitle>, ScrapeError> {
         let url = query.url(page);
         self.scrape_from_api(&url)
     }
@@ -488,7 +479,7 @@ mod tests {
     }
 
     fn get_cookies() -> Cookies {
-        let token = env::var("FW_TOKEN").expect("Set cookies first");
+        let token = env::var("FW_TOKEN").expect("cookies are set via env");
         let session = env::var("FW_SESSION").unwrap();
         let jwt = env::var("FW_JWT").unwrap();
         let username = env::var("FW_USER").unwrap();
