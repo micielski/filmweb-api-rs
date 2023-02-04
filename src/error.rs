@@ -30,21 +30,44 @@ pub enum FilmwebErrors {
 }
 
 #[derive(Error, Debug)]
-pub enum ScrapeError {
+pub enum FilmwebScrapeError {
     #[error("failed sending a request: {}", .source)]
     NetworkError {
         #[from]
         source: reqwest::Error,
     },
-    #[error("Filmweb API has changed and so the crate is outdated")]
-    Outdated {
+    #[error("Filmweb API has changed. Update or wait for an update")]
+    FilmwebJsonApiChanged {
         #[from]
         source: serde_json::Error,
     },
+    #[error("Filmed crate is outdated. Update or wait for an update")]
+    Outdated,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ParseYearError;
+#[derive(Error, Debug)]
+pub enum IMDbScrapeError {
+    #[error("no results for: {}", .search_query)]
+    NoResults { search_query: String },
+    #[error("failed sending a request: {}", .source)]
+    NetworkError {
+        #[from]
+        source: reqwest::Error,
+    },
+    #[error("Filmed crate is outdated. Update or wait for an update")]
+    IrrecoverableOutdated,
+    #[error("Filmed crate is outdated. Update or wait for an update")]
+    IrrecoverableParseYearError {
+        #[from]
+        source: ParseYearError,
+    },
+}
+
+#[derive(Error, Debug, PartialEq, Eq)]
+#[error("Failed parsing year: {}", .year_str)]
+pub struct ParseYearError {
+    year_str: String,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseGenreError;

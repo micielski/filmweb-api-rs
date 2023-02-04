@@ -1,5 +1,5 @@
 use super::FilmwebErrors;
-use crate::{utils::create_client, Genre, Title, TitleID, TitleType, Year};
+use crate::{error::IMDbScrapeError, utils::create_client, Genre, Title, TitleID, TitleType, Year};
 use std::str::FromStr;
 
 use once_cell::sync::OnceCell;
@@ -156,7 +156,7 @@ impl IMDb {
         title: &str,
         year_start: u16,
         year_end: u16,
-    ) -> Result<IMDbTitle, Box<dyn std::error::Error>> {
+    ) -> Result<IMDbTitle, IMDbScrapeError> {
         let search_page_url = format!(
             "https://www.imdb.com/search/title/?title={}&release_date={},{}&adult=include",
             title, year_start, year_end
@@ -176,7 +176,9 @@ impl IMDb {
             log::info!(
             "Failed to get a match in Fn get_imdb_data_advanced for {title} {year_start} on {search_page_url}"
         );
-            return Err(Box::new(FilmwebErrors::ZeroResults));
+            return Err(IMDbScrapeError::NoResults {
+                search_query: format!("{} {}", title.to_owned(), year_start),
+            });
         };
 
         let id = {
@@ -203,7 +205,7 @@ impl IMDb {
                 .next()
                 .unwrap()
                 .inner_html();
-            Year::from_str(&dirty_year).expect("IMDb didn't changed since")
+            Year::from_str(&dirty_year)?
         };
 
         let ScrapedIMDbTitlePageData {

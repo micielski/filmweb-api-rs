@@ -3,7 +3,7 @@ mod json;
 pub mod query;
 mod utils;
 
-use crate::error::{ParseGenreError, ScrapeError};
+use crate::error::{FilmwebScrapeError, ParseGenreError};
 use crate::imdb::IMDb;
 use crate::utils::create_client;
 use crate::{
@@ -256,7 +256,7 @@ impl Filmweb {
         Self(http_client)
     }
 
-    fn scrape_from_api(&self, api_url: &str) -> Result<Vec<FilmwebTitle>, ScrapeError> {
+    fn scrape_from_api(&self, api_url: &str) -> Result<Vec<FilmwebTitle>, FilmwebScrapeError> {
         log::trace!(target: "film_events", "api_url: {:?}", api_url);
 
         let mut found_titles: Vec<FilmwebTitle> = Vec::new();
@@ -270,7 +270,7 @@ impl Filmweb {
                 let (title_type_str, title_type) = match hit.hit_type {
                     Type::Film => ("film", TitleType::Movie),
                     Type::Serial => ("film", TitleType::Show),
-                    _ => panic!(),
+                    _ => panic!("Shouldn't be possible"),
                 };
 
                 let film_preview_req_url = format!(
@@ -337,7 +337,11 @@ impl Filmweb {
     /// #    Ok(())
     /// # }
     /// ```
-    pub fn scrape(&self, query: &Query, page: u16) -> Result<Vec<FilmwebTitle>, ScrapeError> {
+    pub fn scrape(
+        &self,
+        query: &Query,
+        page: u16,
+    ) -> Result<Vec<FilmwebTitle>, FilmwebScrapeError> {
         let url = query.url(page);
         self.scrape_from_api(&url)
     }

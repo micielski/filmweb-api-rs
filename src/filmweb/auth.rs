@@ -460,7 +460,7 @@ impl FilmwebUser {
     }
 
     fn rated_counts(
-        username: &String,
+        username: &str,
         fw_client: &FilmwebUserHttpClient,
     ) -> Result<FilmwebUserCounts, FilmwebErrors> {
         let rated_movies_count = Self::fetch_rated_count(username, "votes", "film", fw_client)?;

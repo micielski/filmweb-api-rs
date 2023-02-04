@@ -22,26 +22,23 @@ pub fn parse_my_votebox(
     client: &Client,
 ) -> Result<ScrapedFilmwebTitleData, FilmwebErrors> {
     let id = votebox
-        .select(&Selector::parse(".previewFilm").unwrap())
+        .select(&Selector::parse(".previewFilm").expect("selector ok"))
         .next()
-        .unwrap()
+        .expect("filmweb hasnt changed")
         .value()
         .attr("data-film-id")
-        .unwrap()
+        .expect("attribute exists")
         .trim()
         .parse::<u32>()?;
     let year = {
         let year = votebox
-            .select(&Selector::parse(".preview__year").unwrap())
+            .select(&Selector::parse(".preview__year").expect("selector ok"))
             .next()
-            .unwrap()
+            .expect("filmweb api hasn't changed")
             .inner_html();
         if year.contains('-') {
             let years = year.trim().split('-').collect::<Vec<&str>>();
-            let year_start = years[0]
-                .trim()
-                .parse::<u16>()
-                .expect("Failed to parse a year from a serial votebox");
+            let year_start = years[0].trim().parse::<u16>()?;
             let year_end = years[1]
                 .trim()
                 .parse::<u16>()
@@ -61,13 +58,13 @@ pub fn parse_my_votebox(
     };
 
     let name = votebox
-        .select(&Selector::parse(".preview__link").unwrap())
+        .select(&Selector::parse(".preview__link").expect("selector ok"))
         .next()
-        .unwrap()
+        .expect("filmweb hasnt changed")
         .inner_html();
 
     let genres: Vec<FilmwebGenre> = votebox
-        .select(&Selector::parse(".preview__detail--genres h3 a").unwrap())
+        .select(&Selector::parse(".preview__detail--genres h3 a").expect("selector ok"))
         .into_iter()
         .inspect(|genre| {
             dbg!(&genre.inner_html());
@@ -75,7 +72,7 @@ pub fn parse_my_votebox(
         .map(|genre| {
             *STR_TO_GENRE
                 .get(genre.inner_html().trim().to_lowercase().as_str())
-                .unwrap()
+                .expect("filmweb didnt added new genres")
         })
         .collect();
     assert!(!genres.is_empty(), "There should be atleast one genre");
@@ -83,12 +80,12 @@ pub fn parse_my_votebox(
     let title_url: String = format!(
         "https://filmweb.pl{}",
         votebox
-            .select(&Selector::parse(".preview__link").unwrap())
+            .select(&Selector::parse(".preview__link").expect("selector ok"))
             .next()
-            .unwrap()
+            .expect("filmweb hasnt changed")
             .value()
             .attr("href")
-            .unwrap()
+            .expect("filmweb hasnt changed")
     );
 
     let alter_titles_url = format!("{title_url}/titles");
@@ -101,12 +98,12 @@ pub fn parse_my_votebox(
         };
 
         document
-            .select(&Selector::parse(".filmCoverSection__duration").unwrap())
+            .select(&Selector::parse(".filmCoverSection__duration").expect("selector ok"))
             .next()
-            .unwrap()
+            .expect("filmweb hasnt changed")
             .value()
             .attr("data-duration")
-            .unwrap()
+            .expect("filmweb hasnt changed")
             .parse::<u16>()
             .map_or_else(
                 |_| {
