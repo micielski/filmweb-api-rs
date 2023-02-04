@@ -67,8 +67,7 @@ pub fn parse_my_votebox(
         .select(&Selector::parse(".preview__detail--genres h3 a").expect("selector ok"))
         .into_iter()
         .inspect(|genre| {
-            // TODO: improve this, make a target
-            log::info!("Genre {}", &genre.inner_html());
+            log::info!(target: "film_fwgenre", "fw_genre: {:?}", &genre.inner_html());
         })
         .map(|genre| {
             *STR_TO_GENRE
