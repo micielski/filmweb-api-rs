@@ -41,6 +41,15 @@ pub enum TitleID {
     IMDbID(String),
 }
 
+impl Display for TitleID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IMDbID(id) => write!(f, "{}", id),
+            Self::FilmwebID(id) => write!(f, "{}", id),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum Year {
     OneYear(u16),
