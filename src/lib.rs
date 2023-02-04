@@ -98,7 +98,11 @@ impl Year {
 impl FromStr for Year {
     type Err = ParseYearError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let dirty_year = s.trim_start_matches('(').trim_end_matches(')');
+        let dirty_year = s
+            .trim()
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim();
         if dirty_year.contains('-') {
             let after_split: Vec<&str> = dirty_year.split('-').collect();
             Ok(Self::Range(

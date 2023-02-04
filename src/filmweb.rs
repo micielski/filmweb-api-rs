@@ -191,6 +191,7 @@ lazy_static! {
             ("katastroficzny", FilmwebGenre::Catastrophe),
             ("komedia kryminalna", FilmwebGenre::CriminalComedy),
             ("komedia obyczajowa", FilmwebGenre::MoralComedy),
+            ("komedia obycz.", FilmwebGenre::MoralComedy),
             ("komedia romantyczna", FilmwebGenre::RomanticComedy),
             ("komedia rom.", FilmwebGenre::RomanticComedy),
             ("komedia", FilmwebGenre::Comedy),
