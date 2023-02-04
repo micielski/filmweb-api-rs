@@ -52,7 +52,6 @@ impl QueryBuilder {
         let url = format!(
             "https://www.filmweb.pl/api/v1/films/search?{year_param}{genres_param}&connective=OR"
         );
-        dbg!(&url);
         Query(url)
     }
 }
