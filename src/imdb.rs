@@ -80,7 +80,7 @@ impl IMDb {
         Self(create_client().expect("can create a client"))
     }
 
-    fn parse_imdb_title_page(&self, id: &str) -> Result<ScrapedIMDbTitlePageData, FilmwebErrors> {
+    fn parse_imdb_title_page(&self, id: &str) -> Result<ScrapedIMDbTitlePageData, IMDbScrapeError> {
         let title_url = format!("https://www.imdb.com/title/{id}/");
         let title_document = {
             let response = self.0.get(title_url).send()?.text()?;
@@ -114,7 +114,9 @@ impl IMDb {
         }
 
         if dirty_duration.len() > 40 {
-            return Err(FilmwebErrors::InvalidDuration);
+            return Err(IMDbScrapeError::IrrecoverableParseDurationError {
+                bad_string: dirty_duration,
+            });
         }
 
         // Example of dirty_duration: 1<!-- -->h<!-- --> <!-- -->33<!-- -->m<
