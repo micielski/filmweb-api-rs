@@ -89,21 +89,6 @@ pub struct FilmwebUserCounts {
     pub watchlist: u16,
 }
 
-impl FilmwebUserCounts {
-    #[must_use]
-    pub const fn movies_pages(&self) -> u8 {
-        (self.movies / 25 + 1) as u8
-    }
-    #[must_use]
-    pub const fn shows_pages(&self) -> u8 {
-        (self.shows / 25 + 1) as u8
-    }
-    #[must_use]
-    pub const fn watchlist_pages(&self) -> u8 {
-        (self.watchlist / 25 + 1) as u8
-    }
-}
-
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FilmwebApiDetails {
     pub rate: u8,
