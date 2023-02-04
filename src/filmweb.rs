@@ -204,7 +204,7 @@ lazy_static! {
             ("niemy", FilmwebGenre::Silent),
             ("obyczajowy", FilmwebGenre::Moral),
             ("poetycki", FilmwebGenre::Poetic),
-            ("politiczny", FilmwebGenre::Political),
+            ("polityczny", FilmwebGenre::Political),
             ("propagandowy", FilmwebGenre::Propaganda),
             ("przygodowy", FilmwebGenre::Adventure),
             ("przyrodniczy", FilmwebGenre::Nature),
