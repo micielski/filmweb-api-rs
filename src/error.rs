@@ -68,7 +68,7 @@ pub enum IMDbScrapeError {
 #[derive(Error, Debug, PartialEq, Eq)]
 #[error("Failed parsing year: {}", .year_str)]
 pub struct ParseYearError {
-    year_str: String,
+    pub year_str: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]

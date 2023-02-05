@@ -105,14 +105,29 @@ impl FromStr for Year {
             .trim();
         if dirty_year.contains('-') {
             let after_split: Vec<&str> = dirty_year.split('-').collect();
+            let year_start = after_split[0].parse::<u16>();
+            let year_end = after_split[1].parse::<u16>();
+            if [year_start.clone(), year_end.clone()]
+                .iter()
+                .any(|year| year.is_err())
+            {
+                return Err(ParseYearError {
+                    year_str: s.to_string(),
+                });
+            };
             Ok(Self::Range(
-                after_split[0].parse::<u16>().expect("it's a year"),
-                after_split[1].parse::<u16>().expect("it's a year"),
+                year_start.expect("it's a year"),
+                year_end.expect("it's a year"),
             ))
         } else {
-            Ok(Self::OneYear(
-                dirty_year.parse::<u16>().expect("it's a year"),
-            ))
+            let year = dirty_year.parse::<u16>();
+            if year.is_err() {
+                return Err(ParseYearError {
+                    year_str: s.to_string(),
+                });
+            } else {
+                Ok(Self::OneYear(year.unwrap()))
+            }
         }
     }
 }
@@ -216,6 +231,7 @@ pub trait Title {
 
     fn year(&self) -> Year;
 
+    #[must_use]
     fn is_year_similar(&self, other_year: Year) -> bool {
         let year_l = self.year().start();
         let year_r = other_year.start();
