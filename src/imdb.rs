@@ -183,7 +183,7 @@ impl IMDb {
             "Failed to get a match in Fn get_imdb_data_advanced for {title} {year_start} on {search_page_url}"
         );
             return Err(IMDbScrapeError::NoResults {
-                search_query: format!("{} {}", title.to_owned(), year_start),
+                search_url: format!("{} {}", title.to_owned(), year_start),
             });
         };
 
@@ -211,7 +211,13 @@ impl IMDb {
                 .next()
                 .unwrap()
                 .inner_html();
-            Year::from_str(&dirty_year)?
+            match Year::from_str(&dirty_year) {
+                Ok(year) => Ok(year),
+                Err(e) => Err(IMDbScrapeError::IrrecoverableParseYearError {
+                    title_url: search_page_url,
+                    source: e,
+                }),
+            }?
         };
 
         let ScrapedIMDbTitlePageData {
@@ -233,7 +239,7 @@ impl IMDb {
         Ok(imdb_data)
     }
 
-    pub fn search(&self, title: &str) -> Result<IMDbTitle, Box<dyn std::error::Error>> {
+    pub fn search(&self, title: &str) -> Result<IMDbTitle, IMDbScrapeError> {
         let url_query = format!("https://www.imdb.com/find?q={title}");
         let document = {
             let response = self.0.get(&url_query).send()?.text()?;
@@ -246,11 +252,12 @@ impl IMDb {
         {
             title.inner_html()
         } else {
-            log::info!("No results in Fn get_imdb_data for {title} on {url_query}");
-            return Err(Box::new(FilmwebErrors::ZeroResults));
+            return Err(IMDbScrapeError::NoResults {
+                search_url: url_query,
+            });
         };
 
-        let year = Year::from_str(
+        let year = match Year::from_str(
             &document
                 .select(
                     &Selector::parse(".ipc-metadata-list-summary-item__li").expect("selector ok"),
@@ -258,8 +265,15 @@ impl IMDb {
                 .next()
                 .expect("selector is ok")
                 .inner_html(),
-        )
-        .expect("IMDb hasn't changed since");
+        ) {
+            Ok(year) => year,
+            Err(e) => {
+                return Err(IMDbScrapeError::IrrecoverableParseYearError {
+                    title_url: url_query,
+                    source: e,
+                })
+            }
+        };
 
         // Should give something like: /title/tt4158110/?ref_=fn_al_tt_1
         let dirty_id = document

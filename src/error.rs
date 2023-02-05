@@ -47,8 +47,8 @@ pub enum FilmwebScrapeError {
 
 #[derive(Error, Debug)]
 pub enum IMDbScrapeError {
-    #[error("no results for: {}", .search_query)]
-    NoResults { search_query: String },
+    #[error("no results in: {}", .search_url)]
+    NoResults { search_url: String },
     #[error("failed sending a request: {}", .source)]
     NetworkError {
         #[from]
@@ -58,7 +58,7 @@ pub enum IMDbScrapeError {
     IrrecoverableOutdated,
     #[error("Filmed crate is outdated. Update or wait for an update")]
     IrrecoverableParseYearError {
-        #[from]
+        title_url: String,
         source: ParseYearError,
     },
     #[error("Filmed crate is outdated. Update or wait for an update. Bad string: {}", .bad_string)]
