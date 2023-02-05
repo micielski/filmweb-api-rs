@@ -216,7 +216,7 @@ pub trait Title {
 
     fn year(&self) -> Year;
 
-    fn compare_year(&self, other_year: Year) -> bool {
+    fn is_year_similar(&self, other_year: Year) -> bool {
         let year_l = self.year().start();
         let year_r = other_year.start();
         year_l == year_r || year_l == year_r + 1 || year_l == year_r - 1
