@@ -255,7 +255,7 @@ impl IMDb {
                 .expect("selector is ok")
                 .inner_html(),
         )
-        .expect("IMDb haven't changed since");
+        .expect("IMDb hasn't changed since");
 
         // Should give something like: /title/tt4158110/?ref_=fn_al_tt_1
         let dirty_id = document

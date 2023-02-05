@@ -98,6 +98,11 @@ impl Year {
 impl FromStr for Year {
     type Err = ParseYearError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let raise_error = || {
+            return Err(ParseYearError {
+                year_str: s.to_string(),
+            });
+        };
         let dirty_year = s
             .trim()
             .trim_start_matches('(')
@@ -107,24 +112,16 @@ impl FromStr for Year {
             let after_split: Vec<&str> = dirty_year.split('-').collect();
             let year_start = after_split[0].parse::<u16>();
             let year_end = after_split[1].parse::<u16>();
-            if [year_start.clone(), year_end.clone()]
-                .iter()
-                .any(|year| year.is_err())
-            {
-                return Err(ParseYearError {
-                    year_str: s.to_string(),
-                });
-            };
-            Ok(Self::Range(
-                year_start.expect("it's a year"),
-                year_end.expect("it's a year"),
-            ))
+            let years = (year_start.clone(), year_end.clone());
+            match years {
+                (Ok(v), Err(_)) => return Ok(Self::OneYear(v)),
+                (Ok(start), Ok(end)) => return Ok(Self::Range(start, end)),
+                (_, _) => raise_error(),
+            }
         } else {
             let year = dirty_year.parse::<u16>();
             if year.is_err() {
-                return Err(ParseYearError {
-                    year_str: s.to_string(),
-                });
+                raise_error()
             } else {
                 Ok(Self::OneYear(year.unwrap()))
             }
@@ -336,8 +333,10 @@ mod tests {
         let year1 = Year::from_str("(2015-2017)").expect("it's ok");
         let year2 = Year::from_str("1984-2021").expect("it's ok");
         let year3 = Year::from_str("2040").expect("it's ok");
+        let year4 = Year::from_str("2002-2019").expect("it's ok");
         assert_eq!((year1.start(), year1.end()), (2015, 2017));
         assert_eq!((year2.start(), year2.end()), (1984, 2021));
         assert_eq!((year3.start(), year3.end()), (2040, 2040));
+        assert_eq!((year4.start(), year4.end()), (2002, 2019));
     }
 }
