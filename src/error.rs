@@ -63,6 +63,8 @@ pub enum IMDbScrapeError {
     },
     #[error("Filmed crate is outdated. Update or wait for an update. Bad string: {}", .bad_string)]
     IrrecoverableParseDurationError { bad_string: String },
+    #[error("Title {} contains no genres", .bad_title_url)]
+    GenreParseError { bad_title_url: String },
 }
 
 #[derive(Error, Debug, PartialEq, Eq)]

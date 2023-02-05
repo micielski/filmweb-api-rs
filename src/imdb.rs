@@ -83,7 +83,7 @@ impl IMDb {
     fn parse_imdb_title_page(&self, id: &str) -> Result<ScrapedIMDbTitlePageData, IMDbScrapeError> {
         let title_url = format!("https://www.imdb.com/title/{id}/");
         let title_document = {
-            let response = self.0.get(title_url).send()?.text()?;
+            let response = self.0.get(&title_url).send()?.text()?;
             Html::parse_document(&response)
         };
 
@@ -95,7 +95,11 @@ impl IMDb {
                 .collect()
         };
 
-        assert!(!genres.is_empty());
+        if genres.is_empty() {
+            return Err(IMDbScrapeError::GenreParseError {
+                bad_title_url: title_url,
+            });
+        }
 
         let get_dirty_duration = |nth| {
             title_document
