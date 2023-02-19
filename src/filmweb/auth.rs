@@ -226,6 +226,12 @@ impl FilmwebRatedTitle {
     }
 }
 
+impl AsRef<FilmwebTitle> for FilmwebRatedTitle {
+    fn as_ref(&self) -> &FilmwebTitle {
+        &self.title
+    }
+}
+
 impl Title for FilmwebRatedTitle {
     fn url(&self) -> &String {
         self.title.url()
