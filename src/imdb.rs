@@ -1,4 +1,3 @@
-use super::FilmwebErrors;
 use crate::{error::IMDbScrapeError, utils::create_client, Genre, Title, TitleID, TitleType, Year};
 use std::str::FromStr;
 

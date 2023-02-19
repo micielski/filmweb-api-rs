@@ -99,9 +99,9 @@ impl FromStr for Year {
     type Err = ParseYearError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let raise_error = || {
-            return Err(ParseYearError {
+            Err(ParseYearError {
                 year_str: s.to_string(),
-            });
+            })
         };
         let dirty_year = s
             .trim()
@@ -112,18 +112,18 @@ impl FromStr for Year {
             let after_split: Vec<&str> = dirty_year.split('-').collect();
             let year_start = after_split[0].parse::<u16>();
             let year_end = after_split[1].parse::<u16>();
-            let years = (year_start.clone(), year_end.clone());
+            let years = (year_start, year_end);
             match years {
-                (Ok(v), Err(_)) => return Ok(Self::OneYear(v)),
-                (Ok(start), Ok(end)) => return Ok(Self::Range(start, end)),
+                (Ok(v), Err(_)) => Ok(Self::OneYear(v)),
+                (Ok(start), Ok(end)) => Ok(Self::Range(start, end)),
                 (_, _) => raise_error(),
             }
         } else {
             let year = dirty_year.parse::<u16>();
-            if year.is_err() {
-                raise_error()
+            if let Ok(year) = year {
+                Ok(Self::OneYear(year))
             } else {
-                Ok(Self::OneYear(year.unwrap()))
+                raise_error()
             }
         }
     }
