@@ -1,7 +1,7 @@
 //! # filmweb-api
 //!
 //! Unofficial API to query and interact with filmweb.pl from Rust with support for authentication
-//! with cookis.
+//! with cookies.
 //! Highly prone to breaking changes.
 
 /// Error types

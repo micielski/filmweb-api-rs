@@ -81,16 +81,16 @@ impl IMDb {
 
     fn parse_imdb_title_page(&self, id: &str) -> Result<ScrapedIMDbTitlePageData, IMDbScrapeError> {
         let title_url = format!("https://www.imdb.com/title/{id}/");
-        let title_document = {
-            let response = self.0.get(&title_url).send()?.text()?;
-            Html::parse_document(&response)
-        };
-
+        let response = self.0.get(&title_url).send()?.text()?;
+        let dom = tl::parse(&response, tl::ParserOptions::default()).unwrap();
+        let parser = dom.parser();
         let genres: Vec<Genre> = {
-            title_document
-                .select(&Selector::parse(".ipc-chip__text").unwrap())
-                .into_iter()
-                .filter_map(|genre| Genre::try_from(genre.inner_html().as_str()).ok())
+            dom.query_selector(".ipc-chip__text")
+                .unwrap()
+                .filter_map(|handle| {
+                    let node = handle.get(parser).unwrap();
+                    Genre::try_from(&*node.inner_text(parser)).ok()
+                })
                 .collect()
         };
 
@@ -101,11 +101,12 @@ impl IMDb {
         }
 
         let get_dirty_duration = |nth| {
-            title_document
-                .select(&Selector::parse(".ipc-inline-list__item").unwrap())
+            let handle = dom
+                .query_selector(".ipc-inline-list__item")
+                .unwrap()
                 .nth(nth)
-                .expect("Panic occured while trying to export {title} {year}")
-                .inner_html()
+                .expect("Panic occured while trying to export {title} {year}");
+            handle.get(parser).unwrap().inner_text(parser)
         };
 
         let mut dirty_duration = get_dirty_duration(5);
@@ -118,17 +119,35 @@ impl IMDb {
 
         if dirty_duration.len() > 40 {
             return Err(IMDbScrapeError::IrrecoverableParseDurationError {
-                bad_string: dirty_duration,
+                bad_string: dirty_duration.to_string(),
             });
         }
 
-        // Example of dirty_duration: 1<!-- -->h<!-- --> <!-- -->33<!-- -->m<
+        // Example of dirty_duration: "1h 33m"
         let duration: u16 = {
-            let dirty_duration: Vec<u16> = dirty_duration
-                .replace("<!-- -->", " ")
-                .split_whitespace()
-                .filter_map(|s| s.parse::<u16>().ok())
-                .collect();
+            dbg!(&dirty_duration);
+            let dirty_duration: Vec<u16> = {
+                let duration = dirty_duration.split_once(' ');
+                match duration {
+                    Some((hours, mins)) if !mins.is_empty() => {
+                        let h_len = hours.len();
+                        let m_len = mins.len();
+                        vec![
+                            hours[..h_len - 1].parse::<u16>().expect("IMDb ok"),
+                            mins[..m_len - 1].parse::<u16>().expect("IMDb ok"),
+                        ]
+                    }
+                    Some((mins, _)) => {
+                        let m_len = mins.len();
+                        vec![mins[..m_len - 1].parse::<u16>().expect("IMDb ok")]
+                    }
+                    None => {
+                        return Err(IMDbScrapeError::IrrecoverableParseDurationError {
+                            bad_string: dirty_duration.to_string(),
+                        })
+                    }
+                }
+            };
             if dirty_duration.len() >= 2 {
                 dirty_duration[0] * 60 + dirty_duration[1]
             } else {
@@ -137,11 +156,15 @@ impl IMDb {
         };
 
         let title_type = {
-            let page_title = title_document
-                .select(&Selector::parse("head title").expect("ok tag"))
-                .next()
-                .expect("tag exists")
-                .inner_html();
+            let page_title = {
+                dom.query_selector("title")
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .get(parser)
+                    .unwrap()
+                    .inner_text(parser)
+            };
             if page_title.contains("TV") && page_title.contains("Series") {
                 TitleType::Show
             } else {
@@ -328,5 +351,12 @@ mod tests {
         let imdb = IMDb::new();
         let stay = imdb.search("Stay 2005").unwrap();
         assert_eq!(stay.title(), "Zostań"); // why the hell this is in polish for me TODO ?
+        assert_eq!(stay.year().start(), 2005);
+        assert_eq!(stay.year().end(), 2005);
+        assert_eq!(stay.duration(), Some(99));
+        assert_eq!(
+            *stay.genres(),
+            vec![Genre::Drama, Genre::Mystery, Genre::Thriller]
+        )
     }
 }
