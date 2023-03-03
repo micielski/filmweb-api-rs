@@ -401,15 +401,16 @@ impl FilmwebUser {
                     ),
                     UserPage::Watchlist(_) => None,
                 };
-                match api_response {
-                    Some(response) => match response?.json::<FilmwebApiDetails>() {
-                        Ok(v) => (Some(v.rate), v.favorite, false),
-                        Err(e) => {
-                            log::info!("Bad Filmweb's api response: {e}");
-                            return Err(FilmwebErrors::InvalidJwt);
-                        }
-                    },
-                    None => (None, false, true),
+
+                let response_text = api_response.unwrap().unwrap().text().unwrap();
+                let json: Result<FilmwebApiDetails, _> = serde_json::from_str(&response_text);
+
+                match json {
+                    Ok(s) => (Some(s.rate), s.favorite, false),
+                    Err(e) => {
+                        log::info!("Bad: {:?}", response_text);
+                        return Err(FilmwebErrors::InvalidJwt);
+                    }
                 }
             };
 
