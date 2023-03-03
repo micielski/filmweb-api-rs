@@ -402,13 +402,14 @@ impl FilmwebUser {
                     UserPage::Watchlist(_) => None,
                 };
 
+                // TODO: get rid of these unwraps
                 let response_text = api_response.unwrap().unwrap().text().unwrap();
                 let json: Result<FilmwebApiDetails, _> = serde_json::from_str(&response_text);
 
                 match json {
                     Ok(s) => (Some(s.rate), s.favorite, false),
                     Err(e) => {
-                        log::info!("Bad: {:?}", response_text);
+                        log::info!("Bad Filmweb's api response: {response_text}\n{e}");
                         return Err(FilmwebErrors::InvalidJwt);
                     }
                 }
