@@ -92,7 +92,7 @@ pub struct FilmwebUserCounts {
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FilmwebApiDetails {
     pub rate: u8,
-    pub favorite: bool,
+    pub favorite: Option<bool>,
     #[serde(rename = "viewDate")]
     pub view_date: u32,
     pub timestamp: u128,
@@ -431,7 +431,7 @@ impl FilmwebUser {
             rated_titles.push(FilmwebRatedTitle::new(
                 unrated_title,
                 rating,
-                is_favorited,
+                is_favorited.unwrap_or(false),
                 is_watchlisted,
             ));
         }
