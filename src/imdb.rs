@@ -110,50 +110,11 @@ impl IMDb {
         };
 
         let mut dirty_duration = get_dirty_duration(5);
-        if dirty_duration.contains("Unrated")
-            || dirty_duration.contains("Not Rated")
-            || dirty_duration.contains("TV")
-        {
+        if !Self::is_dirty_duration_ok(&dirty_duration) {
             dirty_duration = get_dirty_duration(6);
         }
 
-        if dirty_duration.len() > 40 {
-            return Err(IMDbScrapeError::IrrecoverableParseDurationError {
-                bad_string: dirty_duration.to_string(),
-            });
-        }
-
-        // Example of dirty_duration: "1h 33m"
-        let duration: u16 = {
-            dbg!(&dirty_duration);
-            let dirty_duration: Vec<u16> = {
-                let duration = dirty_duration.split_once(' ');
-                match duration {
-                    Some((hours, mins)) if !mins.is_empty() => {
-                        let h_len = hours.len();
-                        let m_len = mins.len();
-                        vec![
-                            hours[..h_len - 1].parse::<u16>().expect("IMDb ok"),
-                            mins[..m_len - 1].parse::<u16>().expect("IMDb ok"),
-                        ]
-                    }
-                    Some((mins, _)) => {
-                        let m_len = mins.len();
-                        vec![mins[..m_len - 1].parse::<u16>().expect("IMDb ok")]
-                    }
-                    None => {
-                        return Err(IMDbScrapeError::IrrecoverableParseDurationError {
-                            bad_string: dirty_duration.to_string(),
-                        })
-                    }
-                }
-            };
-            if dirty_duration.len() >= 2 {
-                dirty_duration[0] * 60 + dirty_duration[1]
-            } else {
-                dirty_duration[0]
-            }
-        };
+        let duration = Self::parse_dirty_duration(&dirty_duration, &title_url)?;
 
         let title_type = {
             let page_title = {
@@ -177,6 +138,71 @@ impl IMDb {
             duration,
             title_type,
         })
+    }
+
+    fn is_dirty_duration_ok(dirty_duration: &str) -> bool {
+        if dirty_duration.contains("Unrated")
+            || dirty_duration.contains("Not Rated")
+            || dirty_duration.contains("TV")
+            || dirty_duration.len() > 40
+            || !dirty_duration
+                .chars()
+                .all(|c| char::is_ascii_alphanumeric(&c) || char::is_ascii_whitespace(&c))
+        {
+            log::info!("Bad IMDb dirty duration: {dirty_duration}");
+            false
+        } else {
+            true
+        }
+    }
+
+    // Example of dirty_duration: "1h 33m"
+    fn parse_dirty_duration(dirty_duration: &str, title_url: &str) -> Result<u16, IMDbScrapeError> {
+        let dirty_duration: Vec<u16> = {
+            let duration = dirty_duration.split_once(' ');
+            match duration {
+                Some((hours, mins)) if !mins.is_empty() => {
+                    let h_len = hours.len();
+                    let m_len = mins.len();
+                    let hours = match hours[..h_len - 1].parse::<u16>() {
+                        Ok(hours) => hours,
+                        Err(_) => {
+                            return Err(IMDbScrapeError::IrrecoverableParseDurationError {
+                                bad_string: dirty_duration.to_string(),
+                                title_url: title_url.to_string(),
+                            })
+                        }
+                    };
+
+                    let mins = match mins[..m_len - 1].parse::<u16>() {
+                        Ok(mins) => mins,
+                        Err(_) => {
+                            return Err(IMDbScrapeError::IrrecoverableParseDurationError {
+                                bad_string: dirty_duration.to_string(),
+                                title_url: title_url.to_string(),
+                            })
+                        }
+                    };
+                    vec![hours, mins]
+                }
+                Some(_) => {
+                    unreachable!();
+                }
+                None => {
+                    let len = dirty_duration.len();
+                    if dirty_duration.chars().nth(len - 1).unwrap() == 'h' {
+                        vec![dirty_duration[..len - 1].parse::<u16>().expect("IMDb ok") * 60]
+                    } else {
+                        vec![dirty_duration[..len - 1].parse::<u16>().expect("IMDb ok")]
+                    }
+                }
+            }
+        };
+        if dirty_duration.len() >= 2 {
+            Ok(dirty_duration[0] * 60 + dirty_duration[1])
+        } else {
+            Ok(dirty_duration[0])
+        }
     }
 
     pub fn advanced_search(
@@ -358,5 +384,13 @@ mod tests {
             *stay.genres(),
             vec![Genre::Drama, Genre::Mystery, Genre::Thriller]
         )
+    }
+
+    #[test]
+    fn parsing_dirty_duration() {
+        let first = IMDb::parse_dirty_duration("2h", "2h test").unwrap();
+        let second = IMDb::parse_dirty_duration("2h 12m", "2h 12m test").unwrap();
+        assert_eq!(first, 120);
+        assert_eq!(second, 132);
     }
 }

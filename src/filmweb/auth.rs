@@ -92,7 +92,7 @@ pub struct FilmwebUserCounts {
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FilmwebApiDetails {
     pub rate: u8,
-    pub favorite: Option<bool>,
+    pub favorite: Option<bool>, // filmweb for some reason instead of sending false when not favorited, sends nothing
     #[serde(rename = "viewDate")]
     pub view_date: u32,
     pub timestamp: u128,
@@ -148,6 +148,7 @@ impl From<UserPage> for UserPageType {
         }
     }
 }
+
 #[derive(Debug)]
 pub struct FilmwebRatedTitle {
     title: FilmwebTitle,
@@ -171,20 +172,6 @@ impl RatedTitle for FilmwebRatedTitle {
 }
 
 impl FilmwebRatedTitle {
-    const fn new(
-        title: FilmwebTitle,
-        rating: Option<u8>,
-        favorited: bool,
-        watchlisted: bool,
-    ) -> Self {
-        Self {
-            title,
-            rating,
-            is_favorited: favorited,
-            is_watchlisted: watchlisted,
-        }
-    }
-
     pub fn to_csv_imdbv3_tmdb_files(&self, files: &mut ExportFiles) {
         let title = &self.title();
         let rating = self
@@ -222,6 +209,22 @@ impl FilmwebRatedTitle {
             (false, true, None) => write_title(&mut files.want2see),
             (false, false, Some(_)) => write_title(&mut files.generic),
             _ => panic!("It can't be possible"),
+        }
+    }
+}
+
+impl FilmwebRatedTitle {
+    const fn new(
+        title: FilmwebTitle,
+        rating: Option<u8>,
+        favorited: bool,
+        watchlisted: bool,
+    ) -> Self {
+        Self {
+            title,
+            rating,
+            is_favorited: favorited,
+            is_watchlisted: watchlisted,
         }
     }
 }
@@ -340,7 +343,7 @@ impl FilmwebUser {
         let fw_client = FilmwebUserHttpClient::new(&token, &session, &jwt);
         let username = Self::get_username(&fw_client).unwrap();
         let counts = Self::rated_counts(&username, &fw_client).unwrap();
-        let fw_client_pool = ClientPool::new(fw_client.into_client(), 3);
+        let fw_client_pool = ClientPool::new(fw_client.into_client(), 5);
         let user = Self {
             fw_client_pool,
             username,
@@ -403,15 +406,19 @@ impl FilmwebUser {
                 };
 
                 // TODO: get rid of these unwraps
-                let response_text = api_response.unwrap().unwrap().text().unwrap();
-                let json: Result<FilmwebApiDetails, _> = serde_json::from_str(&response_text);
-
-                match json {
-                    Ok(s) => (Some(s.rate), s.favorite, false),
-                    Err(e) => {
-                        log::info!("Bad Filmweb's api response: {response_text}\n{e}");
-                        return Err(FilmwebErrors::InvalidJwt);
+                match api_response {
+                    Some(response) => {
+                        let response = response.unwrap().text().unwrap();
+                        let json: Result<FilmwebApiDetails, _> = serde_json::from_str(&response);
+                        match json {
+                            Ok(s) => (Some(s.rate), s.favorite.unwrap_or(false), false),
+                            Err(e) => {
+                                log::info!("Bad Filmweb's api response: {response}\n{e}");
+                                return Err(FilmwebErrors::InvalidJwt);
+                            }
+                        }
                     }
+                    None => (None, false, true),
                 }
             };
 
@@ -431,7 +438,7 @@ impl FilmwebUser {
             rated_titles.push(FilmwebRatedTitle::new(
                 unrated_title,
                 rating,
-                is_favorited.unwrap_or(false),
+                is_favorited,
                 is_watchlisted,
             ));
         }
@@ -495,6 +502,7 @@ impl User for FilmwebUser {
     /// # use std::error::Error;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use filmed::filmweb::FilmwebUser;
+    /// use filmed::User;
     /// let user = FilmwebUser::new("FW_TOKEN", "FW_SESSION", "JWT")?;
     /// let username = user.username();
     /// assert_eq!(username, "your username");

@@ -88,9 +88,10 @@ impl Year {
 /// # Examples
 /// ```
 /// use filmed::Year;
-/// let year1 = Year::from_str("(2015-2017)");
-/// let year2 = Year::from_str("1984-2021");
-/// let year3 = Year::from_str("2040");
+/// use std::str::FromStr;
+/// let year1 = Year::from_str("(2015-2017)").expect("ok str");
+/// let year2 = Year::from_str("1984-2021").expect("ok str");
+/// let year3 = Year::from_str("2040").expect("ok str");
 /// assert_eq!((year1.start(), year1.end()), (2015, 2017));
 /// assert_eq!((year2.start(), year2.end()), (1984, 2021));
 /// assert_eq!(year3.start(), 2040);
@@ -246,7 +247,7 @@ pub trait Title {
     /// # use std::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use filmed::filmweb::{Filmweb, FwGenre, QueryBuilder};
+    /// use filmed::filmweb::{Filmweb, FilmwebGenre, QueryBuilder};
     /// use filmed::{Title, Year};
     ///
     /// let fw = Filmweb::new();
@@ -299,19 +300,25 @@ pub trait IMDbLookup: Title + AlternateTitles {
             Year::OneYear(year) | Year::Range(year, _) => *year,
         };
 
-        while let Some((ref alternate_title, score)) = self.alter_titles().as_mut().unwrap().pop() {
-            if score == 0 {
-                break;
+        // Will check until there's a good canditate. Break on score == 0 when it takes too long
+        while let Some((ref alternate_title, _score)) = self.alter_titles().as_mut().unwrap().pop()
+        {
+            let advanced_search = imdb.advanced_search(&alternate_title.title, year, year);
+            if let Ok(imdb_title) = advanced_search {
+                if self.is_duration_similar(imdb_title.duration().unwrap() as u32)
+                    && self.is_year_similar(imdb_title.year())
+                {
+                    return Ok(imdb_title);
+                };
             }
 
-            if let Ok(imdb_title) = imdb.advanced_search(&alternate_title.title, year, year) {
-                return Ok(imdb_title);
-            }
-
-            if let Ok(imdb_title) =
-                imdb.search(&format!("{} {}", &alternate_title.title, self.year()))
-            {
-                return Ok(imdb_title);
+            let normal_search = imdb.search(&format!("{} {}", &alternate_title.title, self.year()));
+            if let Ok(imdb_title) = normal_search {
+                if self.is_duration_similar(imdb_title.duration().unwrap() as u32)
+                    && self.is_year_similar(imdb_title.year())
+                {
+                    return Ok(imdb_title);
+                };
             }
         }
         Err(FilmwebErrors::ZeroResults)

@@ -321,19 +321,20 @@ impl Filmweb {
     /// # use std::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use filmed::filmweb::{Filmweb, FwGenre, QueryBuilder};
+    /// use filmed::filmweb::{Filmweb, FilmwebGenre, QueryBuilder};
     /// use filmed::{Title, Year};
+    /// use std::str::FromStr;
     ///
     /// let fw = Filmweb::new();
     /// let query = QueryBuilder::new()
-    ///     .year(Year::from_str("2017-2021"))
-    ///     .genres(vec![FwGenre::Drama, FwGenre::Romance])
+    ///     .year(Year::from_str("2017-2021").expect("ok str"))
+    ///     .genres(vec![FilmwebGenre::Drama, FilmwebGenre::Romance])
     ///     .build();
     /// // Scrapes a page containing most often rated comedies, 1 is the page number
     /// // While Joker may not be a romance, it's still a drama
     /// let results = fw.scrape(&query, 1)?;
     /// assert_eq!(results[0].title(), "Joker");
-    /// assert_eq!(results[0].year(), Year::from_str("2019"));
+    /// assert_eq!(results[0].year(), Year::from_str("2019").expect("ok str"));
     /// #
     /// #    Ok(())
     /// # }
