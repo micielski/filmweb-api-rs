@@ -109,10 +109,22 @@ impl IMDb {
             handle.get(parser).unwrap().inner_text(parser)
         };
 
-        let mut dirty_duration = get_dirty_duration(5);
-        if !Self::is_dirty_duration_ok(&dirty_duration) {
-            dirty_duration = get_dirty_duration(6);
-        }
+        let mut x = 4;
+        let dirty_duration = {
+            loop {
+                let duration_candidate = get_dirty_duration(x);
+                if Self::is_dirty_duration_ok(&duration_candidate) {
+                    break duration_candidate;
+                };
+                if x == 7 {
+                    return Err(IMDbScrapeError::IrrecoverableParseDurationError {
+                        bad_string: duration_candidate.to_string(),
+                        title_url: title_url.to_string(),
+                    });
+                }
+                x += 1;
+            }
+        };
 
         let duration = Self::parse_dirty_duration(&dirty_duration, &title_url)?;
 
@@ -141,18 +153,16 @@ impl IMDb {
     }
 
     fn is_dirty_duration_ok(dirty_duration: &str) -> bool {
-        if dirty_duration.contains("Unrated")
-            || dirty_duration.contains("Not Rated")
-            || dirty_duration.contains("TV")
-            || dirty_duration.len() > 40
-            || !dirty_duration
-                .chars()
-                .all(|c| char::is_ascii_alphanumeric(&c) || char::is_ascii_whitespace(&c))
+        if dirty_duration
+            .chars()
+            .all(|c| matches!(c, 'h' | 'm' | ' ' | '0'..='9'))
+            && dirty_duration.len() < 20
+            && !dirty_duration.chars().all(|c| char::is_ascii_digit(&c))
         {
+            true
+        } else {
             log::info!("Bad IMDb dirty duration: {dirty_duration}");
             false
-        } else {
-            true
         }
     }
 
@@ -190,10 +200,19 @@ impl IMDb {
                 }
                 None => {
                     let len = dirty_duration.len();
-                    if dirty_duration.chars().nth(len - 1).unwrap() == 'h' {
-                        vec![dirty_duration[..len - 1].parse::<u16>().expect("IMDb ok") * 60]
-                    } else {
-                        vec![dirty_duration[..len - 1].parse::<u16>().expect("IMDb ok")]
+                    match dirty_duration.chars().nth(len - 1) {
+                        Some('h') => {
+                            vec![dirty_duration[..len - 1].parse::<u16>().expect("IMDb ok") * 60]
+                        }
+                        Some('m') => {
+                            vec![dirty_duration[..len - 1].parse::<u16>().expect("IMDb ok") * 60]
+                        }
+                        _ => {
+                            return Err(IMDbScrapeError::IrrecoverableParseDurationError {
+                                bad_string: dirty_duration.to_string(),
+                                title_url: title_url.to_string(),
+                            })
+                        }
                     }
                 }
             }
@@ -384,6 +403,20 @@ mod tests {
             *stay.genres(),
             vec![Genre::Drama, Genre::Mystery, Genre::Thriller]
         )
+    }
+
+    #[test]
+    fn searching_imdb2() {
+        let imdb = IMDb::new();
+        let movie = imdb.search("Josee to Tora to Sakana-tachi").unwrap();
+        assert_eq!(movie.year().start(), 2020);
+    }
+
+    #[test]
+    fn searching_imdb3() {
+        let imdb = IMDb::new();
+        let the_whale = imdb.search("The Whale 2022").unwrap();
+        assert_eq!(the_whale.year().start(), 2022);
     }
 
     #[test]
